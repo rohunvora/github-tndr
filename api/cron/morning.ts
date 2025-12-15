@@ -7,7 +7,7 @@ import { sendMessage, createBot } from '../../lib/telegram.js';
 import { stateManager } from '../../lib/state.js';
 
 const bot = createBot(process.env.TELEGRAM_BOT_TOKEN!);
-const chatId = process.env.USER_TELEGRAM_CHAT_ID!;
+const chatId = process.env.USER_TELEGRAM_CHAT_ID!.trim();
 
 const agent = new Agent(
   process.env.ANTHROPIC_API_KEY!,

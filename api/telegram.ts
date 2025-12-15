@@ -21,7 +21,7 @@ const botInfo: UserFromGetMe = {
 };
 
 const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN!, { botInfo });
-const chatId = process.env.USER_TELEGRAM_CHAT_ID!;
+const chatId = process.env.USER_TELEGRAM_CHAT_ID!.trim();
 
 const agent = new Agent(
   process.env.ANTHROPIC_API_KEY!,
@@ -193,8 +193,19 @@ export default async function handler(req: Request) {
 
   try {
     const update = await req.json() as Update;
+    
+    // Debug logging
+    const debugInfo = {
+      updateType: update.message ? 'message' : 'other',
+      fromId: update.message?.from?.id,
+      expectedChatId: chatId,
+      text: update.message?.text?.substring(0, 50),
+    };
+    console.log('Telegram update:', JSON.stringify(debugInfo));
+    
     await bot.handleUpdate(update);
-    return new Response(JSON.stringify({ success: true }), {
+    
+    return new Response(JSON.stringify({ success: true, debug: debugInfo }), {
       headers: { 'Content-Type': 'application/json' },
     });
   } catch (error) {
