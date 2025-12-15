@@ -2,11 +2,8 @@
   "name": "relentless-project-pusher",
   "version": "1.0.0",
   "description": "Relentless Telegram bot that pushes you to ship",
-  "type": "module",
   "scripts": {
-    "dev": "vercel dev",
-    "build": "tsc",
-    "type-check": "tsc --noEmit"
+    "dev": "vercel dev"
   },
   "dependencies": {
     "@vercel/kv": "^0.2.1",
@@ -15,8 +12,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "typescript": "^5.3.3",
-    "vercel": "^34.0.0"
+    "typescript": "^5.3.3"
   }
 }
 
