@@ -83,13 +83,16 @@ bot.command('feedback', async (ctx) => {
 });
 
 bot.command('status', async (ctx) => {
-  await ctx.reply('Checking your projects...');
-  await agent.syncProjectStates();
-  const response = await agent.generateMessage({
-    trigger: 'user_reply',
-    userMessage: 'Give me a quick status on all my projects - focus on what needs to ship.',
-  });
-  await ctx.reply(response, { parse_mode: 'Markdown' });
+  try {
+    const response = await agent.generateMessage({
+      trigger: 'user_reply',
+      userMessage: 'Quick status check - what should I focus on right now?',
+    });
+    await ctx.reply(response, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Status error:', error);
+    await ctx.reply("Couldn't fetch status. Try again or just tell me what you're working on.");
+  }
 });
 
 bot.command('focus', async (ctx) => {

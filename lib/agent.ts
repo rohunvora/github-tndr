@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getContextualPrompt } from './personality.js';
-import { stateManager, type ProjectState, type Commitment, type ConversationMessage } from './state.js';
+import { stateManager } from './state.js';
 import { GitHubClient } from './github.js';
 import { VercelClient } from './vercel.js';
 
@@ -21,13 +21,12 @@ export class Agent {
     projectName?: string;
     userMessage?: string;
   }): Promise<string> {
-    // Gather all context
-    const projects = await this.gatherProjectStates();
+    // Quick gather - just basic info, no deep API calls
+    const projects = await this.quickGatherProjects();
     const commitments = await stateManager.getCommitments();
-    const recentConversation = await stateManager.getRecentConversation(10);
+    const recentConversation = await stateManager.getRecentConversation(5);
     const currentTime = new Date().toISOString();
 
-    // Build contextual prompt
     const prompt = getContextualPrompt({
       projects,
       commitments,
@@ -35,52 +34,34 @@ export class Agent {
       currentTime,
     });
 
-    // Add event-specific context if provided
-    let userMessage = '';
+    let userContext = '';
     if (context?.userMessage) {
-      userMessage = `\n\nUser just said: "${context.userMessage}"\n\nRespond to this directly and push them forward.`;
+      userContext = `\n\nUser said: "${context.userMessage}"`;
     } else if (context?.eventType === 'commit' && context.projectName) {
-      userMessage = `\n\nA new commit was just pushed to ${context.projectName}. React to it - what's next?`;
+      userContext = `\n\nNew commit on ${context.projectName}. Push them to deploy it.`;
     } else if (context?.eventType === 'deploy' && context.projectName) {
-      userMessage = `\n\nA deployment just completed for ${context.projectName}. What should they test? What's missing?`;
-    } else if (context?.eventType === 'stale') {
-      userMessage = `\n\nYou're checking for stale projects. Call them out directly.`;
-    } else if (context?.eventType === 'morning') {
-      userMessage = `\n\nIt's morning. Give them a briefing of all projects and what they need to ship today.`;
-    } else if (context?.eventType === 'midday') {
-      userMessage = `\n\nIt's midday. Check progress on morning commitments. Push them.`;
-    } else if (context?.eventType === 'afternoon') {
-      userMessage = `\n\nIt's afternoon. Push hard on stale projects. What's shipping today?`;
-    } else if (context?.eventType === 'evening') {
-      userMessage = `\n\nIt's evening. Recap what got done. Set tomorrow's focus.`;
+      userContext = `\n\n${context.projectName} just deployed. Push them to share it.`;
+    } else if (context?.eventType) {
+      userContext = `\n\nTime-based check-in. Push on the most important thing.`;
     }
-
-    const fullPrompt = prompt + userMessage;
 
     try {
       const response = await this.anthropic.messages.create({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [
-          {
-            role: 'user',
-            content: fullPrompt,
-          },
-        ],
+        max_tokens: 200, // Short responses only
+        messages: [{ role: 'user', content: prompt + userContext }],
       });
 
       const content = response.content[0];
-      if (content.type === 'text') {
-        return content.text;
-      }
-      return 'Error generating response';
+      return content.type === 'text' ? content.text : 'Hey, what are you working on?';
     } catch (error) {
-      console.error('Anthropic API error:', error);
-      return 'Error generating response. Check logs.';
+      console.error('AI error:', error);
+      return "What's the one thing you're shipping today?";
     }
   }
 
-  private async gatherProjectStates(): Promise<Array<{
+  // Quick version - just gets repo list, no deep fetches
+  private async quickGatherProjects(): Promise<Array<{
     name: string;
     repo: string;
     description: string | null;
@@ -91,99 +72,44 @@ export class Agent {
     deployStatus: string | null;
     previewUrl: string | null;
   }>> {
-    const githubRepos = await this.github.getUserRepos();
-    const vercelProjects = await this.vercel.getProjects();
+    try {
+      const [repos, vercelProjects] = await Promise.all([
+        this.github.getUserRepos(),
+        this.vercel.getProjects().catch(() => []),
+      ]);
 
-    // Sort by most recently pushed
-    const sortedRepos = githubRepos.sort((a, b) => 
-      new Date(b.pushed_at).getTime() - new Date(a.pushed_at).getTime()
-    );
+      // Just top 10, sorted by recent activity
+      const recent = repos
+        .sort((a, b) => new Date(b.pushed_at).getTime() - new Date(a.pushed_at).getTime())
+        .slice(0, 10);
 
-    // Only process the 30 most recently active repos to avoid rate limits
-    const activeRepos = sortedRepos.slice(0, 30);
-
-    // Match GitHub repos to Vercel projects by name
-    const projects = await Promise.all(
-      activeRepos.map(async (repo) => {
-        const [owner, name] = repo.full_name.split('/');
-        const vercelProject = vercelProjects.find(p => 
-          p.name === name || p.name === repo.full_name.replace('/', '-')
-        );
-
-        // Get latest commit
-        let lastCommit: string | null = repo.pushed_at;
-        let lastCommitMessage: string | null = null;
-        try {
-          const commit = await this.github.getLatestCommit(owner, name, repo.default_branch);
-          if (commit) {
-            lastCommit = commit.commit.author.date;
-            lastCommitMessage = commit.commit.message.split('\n')[0]; // First line only
-          }
-        } catch (error) {
-          // Use pushed_at as fallback
-          lastCommit = repo.pushed_at;
-        }
-
-        // Get latest deployment - check for live URL
-        let lastDeploy: string | null = null;
-        let deployStatus: string | null = null;
-        let previewUrl: string | null = null;
-        
-        // First check if repo has a homepage set (manual deploy URL)
-        if (repo.homepage) {
-          previewUrl = repo.homepage;
-          deployStatus = 'ready';
-        }
-        
-        // Then check Vercel
-        if (vercelProject) {
-          try {
-            const deployment = await this.vercel.getLatestDeployment(vercelProject.id);
-            if (deployment) {
-              lastDeploy = new Date(deployment.createdAt).toISOString();
-              deployStatus = deployment.state.toLowerCase();
-              if (deployment.state === 'READY' && deployment.url) {
-                previewUrl = `https://${deployment.url}`;
-              }
-            }
-          } catch (error) {
-            // Keep any existing previewUrl from homepage
-          }
-        }
-
+      return recent.map(repo => {
+        const vercel = vercelProjects.find(p => p.name === repo.name);
         return {
-          name,
+          name: repo.name,
           repo: repo.full_name,
           description: repo.description,
-          lastCommit,
-          lastCommitMessage,
-          vercelProject: vercelProject?.name || null,
-          lastDeploy,
-          deployStatus,
-          previewUrl,
+          lastCommit: repo.pushed_at,
+          lastCommitMessage: null,
+          vercelProject: vercel?.name || null,
+          lastDeploy: null,
+          deployStatus: null,
+          previewUrl: repo.homepage || null,
         };
-      })
-    );
-
-    return projects;
+      });
+    } catch (error) {
+      console.error('Error gathering projects:', error);
+      return [];
+    }
   }
 
+  // Full sync - only for cron jobs, not real-time
   async syncProjectStates(): Promise<void> {
-    const projects = await this.gatherProjectStates();
+    const projects = await this.quickGatherProjects();
     
     for (const project of projects) {
       const existing = await stateManager.getProjectState(project.name);
       
-      // Determine status based on deployment
-      let status: 'idea' | 'building' | 'deployed' | 'launched' | 'validated' | 'abandoned' = 'idea';
-      if (project.previewUrl && project.deployStatus === 'ready') {
-        status = existing?.status === 'launched' || existing?.status === 'validated' 
-          ? existing.status 
-          : 'deployed';
-      } else if (project.lastCommit) {
-        status = 'building';
-      }
-
       await stateManager.setProjectState(project.name, {
         repo: project.repo,
         description: project.description,
@@ -193,13 +119,11 @@ export class Agent {
         lastDeploy: project.lastDeploy,
         deployStatus: project.deployStatus as 'ready' | 'building' | 'error' | null,
         previewUrl: project.previewUrl,
-        // Preserve existing GTM data
         launchedAt: existing?.launchedAt || null,
         launchUrl: existing?.launchUrl || null,
         userFeedback: existing?.userFeedback || [],
-        status,
+        status: project.previewUrl ? 'deployed' : 'building',
       });
     }
   }
 }
-
