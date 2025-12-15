@@ -40,12 +40,13 @@ export class GitHubClient {
       throw new Error(`GitHub API error: ${response.statusText}`);
     }
 
-    return response.json();
+    const data = await response.json();
+    return data as T;
   }
 
   async getUserRepos(): Promise<GitHubRepo[]> {
     const repos = await this.request<GitHubRepo[]>('/user/repos?sort=updated&per_page=100');
-    return repos.filter(repo => !repo.name.includes('.github')); // Filter out meta repos
+    return repos.filter(repo => !repo.name.includes('.github'));
   }
 
   async getRepoCommits(owner: string, repo: string, branch: string = 'main'): Promise<GitHubCommit[]> {
@@ -69,4 +70,3 @@ export class GitHubClient {
     });
   }
 }
-

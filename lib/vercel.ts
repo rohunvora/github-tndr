@@ -16,6 +16,20 @@ export interface VercelDeployment {
   };
 }
 
+interface VercelProjectsResponse {
+  projects: VercelProject[];
+}
+
+interface VercelDeploymentsResponse {
+  deployments: VercelDeployment[];
+}
+
+interface VercelErrorResponse {
+  error?: {
+    message?: string;
+  };
+}
+
 export class VercelClient {
   private token: string;
   private teamId: string | null;
@@ -46,7 +60,7 @@ export class VercelClient {
       throw new Error(`Vercel API error: ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as VercelProjectsResponse;
     return data.projects || [];
   }
 
@@ -62,7 +76,7 @@ export class VercelClient {
       throw new Error(`Vercel API error: ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as VercelDeploymentsResponse;
     return data.deployments || [];
   }
 
@@ -86,11 +100,11 @@ export class VercelClient {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`Vercel deployment error: ${error.error?.message || response.statusText}`);
+      const errorData = await response.json() as VercelErrorResponse;
+      throw new Error(`Vercel deployment error: ${errorData.error?.message || response.statusText}`);
     }
 
-    return response.json();
+    const data = await response.json() as VercelDeployment;
+    return data;
   }
 }
-
