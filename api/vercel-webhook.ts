@@ -1,3 +1,7 @@
+export const config = {
+  runtime: 'edge',
+};
+
 import { Agent } from '../lib/agent.js';
 import { sendMessage, createBot } from '../lib/telegram.js';
 import { stateManager } from '../lib/state.js';
