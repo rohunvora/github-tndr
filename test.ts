@@ -13,10 +13,22 @@
 
 import * as fs from 'fs';
 import * as readline from 'readline';
+import { config } from 'dotenv';
 
-const WEBHOOK_URL = 'https://github-tndr.vercel.app/api/telegram';
-const CONVERSATIONS_URL = 'https://github-tndr.vercel.app/api/conversations';
-const CHAT_ID = 2105556647;
+// Load .env file for local development
+config();
+
+// Configuration from environment
+const BASE_URL = process.env.VERCEL_URL || 'https://github-tndr.vercel.app';
+const WEBHOOK_URL = `${BASE_URL}/api/telegram`;
+const CONVERSATIONS_URL = `${BASE_URL}/api/conversations`;
+const CHAT_ID = parseInt(process.env.USER_TELEGRAM_CHAT_ID?.trim() || '0', 10);
+
+if (!CHAT_ID) {
+  console.error('\x1b[31mError: USER_TELEGRAM_CHAT_ID not set in .env file\x1b[0m');
+  console.log('\nCreate a .env file with:\n  USER_TELEGRAM_CHAT_ID=your_chat_id\n');
+  process.exit(1);
+}
 
 // Terminal colors
 const c = {

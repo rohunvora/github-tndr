@@ -1,6 +1,19 @@
 node_modules/
 dist/
-.env
 .vercel
-*.log
 
+# Environment files (contain secrets)
+.env
+.env.local
+.env.*.local
+
+# Log files
+*.log
+npm-debug.log*
+
+# Exported conversations (may contain personal info)
+conversation-*.md
+
+# OS files
+.DS_Store
+Thumbs.db
