@@ -3,5 +3,5 @@ export const config = {
 };
 
 export default function handler() {
-  return new Response('pong');
+  return new Response('pong v2 - with GTM pipeline');
 }
