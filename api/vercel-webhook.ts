@@ -12,13 +12,28 @@ const agent = new Agent(
   process.env.VERCEL_TEAM_ID
 );
 
+interface VercelWebhookEvent {
+  type: string;
+  payload: {
+    deployment?: {
+      name?: string;
+      url?: string;
+      readyState?: string;
+      createdAt?: number;
+    };
+    project?: {
+      name?: string;
+    };
+  };
+}
+
 export default async function handler(req: Request) {
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
   }
 
   try {
-    const event = await req.json();
+    const event = await req.json() as VercelWebhookEvent;
     const eventType = event.type;
 
     // Handle deployment events
@@ -37,9 +52,18 @@ export default async function handler(req: Request) {
 
       // Update project state
       await stateManager.setProjectState(projectName, {
+        repo: projectName,
+        description: null,
+        lastCommit: null,
+        lastCommitMessage: null,
+        vercelProject: projectName,
         lastDeploy: new Date(deployment.createdAt || Date.now()).toISOString(),
         deployStatus: deployStatus as 'ready' | 'building' | 'error',
         previewUrl,
+        launchedAt: null,
+        launchUrl: null,
+        userFeedback: [],
+        status: 'deployed',
       });
 
       // Only send message for ready or error states
@@ -71,4 +95,3 @@ export default async function handler(req: Request) {
     });
   }
 }
-

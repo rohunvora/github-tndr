@@ -1,4 +1,5 @@
-import { Bot, Context } from 'grammy';
+import { Bot } from 'grammy';
+import type { Update } from 'grammy/types';
 import { Agent } from '../lib/agent.js';
 import { stateManager } from '../lib/state.js';
 
@@ -14,7 +15,8 @@ const agent = new Agent(
 
 // Handle special commands
 bot.command('launched', async (ctx) => {
-  const args = ctx.message.text?.split(' ').slice(1) || [];
+  const text = ctx.message?.text || ctx.msg?.text || '';
+  const args = text.split(' ').slice(1);
   const projectName = args[0];
   const launchUrl = args[1];
   
@@ -38,7 +40,8 @@ bot.command('launched', async (ctx) => {
 });
 
 bot.command('feedback', async (ctx) => {
-  const args = ctx.message.text?.split(' ').slice(1) || [];
+  const text = ctx.message?.text || ctx.msg?.text || '';
+  const args = text.split(' ').slice(1);
   const projectName = args[0];
   const feedback = args.slice(1).join(' ');
   
@@ -63,6 +66,7 @@ bot.command('feedback', async (ctx) => {
 });
 
 bot.command('status', async (ctx) => {
+  await ctx.reply('Checking your projects...');
   await agent.syncProjectStates();
   const response = await agent.generateMessage({
     trigger: 'user_reply',
@@ -72,7 +76,8 @@ bot.command('status', async (ctx) => {
 });
 
 bot.command('focus', async (ctx) => {
-  const args = ctx.message.text?.split(' ').slice(1) || [];
+  const text = ctx.message?.text || ctx.msg?.text || '';
+  const args = text.split(' ').slice(1);
   const projectName = args[0];
   
   if (!projectName) {
@@ -89,9 +94,21 @@ bot.command('focus', async (ctx) => {
   await ctx.reply(`🎯 Locked in on **${projectName}**. I'll be relentless about this one until it ships. What's the ONE thing blocking launch?`, { parse_mode: 'Markdown' });
 });
 
+bot.command('start', async (ctx) => {
+  await ctx.reply(`Hey. I'm your project pusher. I track all your GitHub repos and push you to actually SHIP them, not just code them.
+
+Commands:
+/status - See all your projects
+/focus <project> - Lock in on one project
+/launched <project> <url> - Mark something shipped
+/feedback <project> <text> - Record user feedback
+
+Or just talk to me. I'll push you to launch.`);
+});
+
 // Handle regular messages
-bot.on('message', async (ctx: Context) => {
-  const userMessage = ctx.message.text || '';
+bot.on('message:text', async (ctx) => {
+  const userMessage = ctx.message.text;
   const userId = ctx.from?.id.toString();
 
   // Only respond to the configured user
@@ -155,7 +172,7 @@ export default async function handler(req: Request) {
   }
 
   try {
-    const update = await req.json();
+    const update = await req.json() as Update;
     await bot.handleUpdate(update);
     return new Response(JSON.stringify({ success: true }), {
       headers: { 'Content-Type': 'application/json' },
@@ -168,4 +185,3 @@ export default async function handler(req: Request) {
     });
   }
 }
-
