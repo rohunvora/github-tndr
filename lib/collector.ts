@@ -419,7 +419,8 @@ export class Collector {
 
     try {
       // Use microlink for screenshots (free tier, no API key needed)
-      const screenshotApiUrl = `https://api.microlink.io/?url=${encodeURIComponent(url)}&screenshot=true&meta=false&embed=screenshot.url`;
+      // Note: don't use embed= parameter as it returns binary instead of JSON
+      const screenshotApiUrl = `https://api.microlink.io/?url=${encodeURIComponent(url)}&screenshot=true&meta=false`;
       
       const response = await fetch(screenshotApiUrl, { 
         signal: AbortSignal.timeout(10000) // 10s timeout
