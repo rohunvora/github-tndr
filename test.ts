@@ -88,7 +88,7 @@ async function sendMessage(text: string): Promise<{ success: boolean; status: nu
 
 async function getConversations(limit = 20): Promise<ConversationData> {
   const response = await fetch(`${CONVERSATIONS_URL}?limit=${limit}`);
-  return response.json();
+  return response.json() as Promise<ConversationData>;
 }
 
 async function waitForResponse(waitMs = 4000): Promise<string | null> {
