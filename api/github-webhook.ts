@@ -2,20 +2,9 @@ export const config = {
   runtime: 'edge',
 };
 
-import { Agent } from '../lib/agent.js';
-import { sendMessage, createBot } from '../lib/telegram.js';
 import { stateManager } from '../lib/state.js';
 
-const bot = createBot(process.env.TELEGRAM_BOT_TOKEN!);
-const chatId = process.env.USER_TELEGRAM_CHAT_ID!.trim();
-
-const agent = new Agent(
-  process.env.ANTHROPIC_API_KEY!,
-  process.env.GITHUB_TOKEN!,
-  process.env.VERCEL_TOKEN!,
-  process.env.VERCEL_TEAM_ID
-);
-
+// GitHub webhooks just update state - let cron handle messaging (dedupe)
 export default async function handler(req: Request) {
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
@@ -26,41 +15,19 @@ export default async function handler(req: Request) {
     const event = JSON.parse(payload);
     const eventType = req.headers.get('x-github-event');
 
-    // Only handle push events for now
     if (eventType === 'push') {
-      const repoName = event.repository?.name || 'unknown';
-      const commitMessage = event.head_commit?.message || 'No message';
-
-      // Update project state
-      await stateManager.setProjectState(repoName, {
-        repo: repoName,
-        description: null,
-        lastCommit: event.head_commit?.timestamp || new Date().toISOString(),
-        lastCommitMessage: commitMessage.split('\n')[0],
-        vercelProject: null,
-        lastDeploy: null,
-        deployStatus: null,
-        previewUrl: null,
-        launchedAt: null,
-        launchUrl: null,
-        userFeedback: [],
-        status: 'building',
-      });
-
-      // Generate response
-      const message = await agent.generateMessage({
-        trigger: 'webhook',
-        eventType: 'commit',
-        projectName: repoName,
-      });
-
-      await sendMessage(bot, chatId, message);
-
-      await stateManager.addConversationMessage({
-        role: 'assistant',
-        content: message,
-        timestamp: new Date().toISOString(),
-      });
+      const repoName = event.repository?.name;
+      
+      if (repoName) {
+        // Just update state - cron will handle messaging with dedupe
+        await stateManager.setProjectState(repoName, {
+          repo: event.repository?.full_name || repoName,
+          description: event.repository?.description || null,
+          lastCommit: event.head_commit?.timestamp || new Date().toISOString(),
+          lastCommitMessage: event.head_commit?.message?.split('\n')[0] || null,
+          status: 'building',
+        });
+      }
     }
 
     return new Response(JSON.stringify({ success: true }), {

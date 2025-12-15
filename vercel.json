@@ -1,21 +1,16 @@
 {
   "crons": [
     {
-      "path": "/api/cron/morning",
-      "schedule": "0 8 * * *"
+      "path": "/api/cron/snapshot",
+      "schedule": "0 9 * * *"
     },
     {
-      "path": "/api/cron/midday",
-      "schedule": "0 13 * * *"
+      "path": "/api/cron/snapshot",
+      "schedule": "0 14 * * *"
     },
     {
-      "path": "/api/cron/afternoon",
-      "schedule": "0 17 * * *"
-    },
-    {
-      "path": "/api/cron/evening",
-      "schedule": "0 21 * * *"
+      "path": "/api/cron/snapshot",
+      "schedule": "0 19 * * *"
     }
   ]
 }
-
