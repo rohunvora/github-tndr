@@ -84,13 +84,14 @@ export default async function handler(req: Request) {
 }
 
 function formatExampleMessage(snapshot: any, assessment: any): string {
-  const stage = {
+  const stageMap: Record<string, string> = {
     'building': '🔨 Building',
     'packaging': '📦 Packaging',
     'ready_to_launch': '🚀 Ready to Launch',
     'launching': '📣 Launching',
     'post_launch': '📊 Post-Launch',
-  }[snapshot.gtmStage] || '';
+  };
+  const stage = stageMap[snapshot.gtmStage] || '';
 
   let msg = `**${snapshot.name}** ${stage}\n\n`;
   
