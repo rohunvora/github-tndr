@@ -248,15 +248,12 @@ export async function generateCard(
   const priority = calculatePriority(repo, memory);
   
   // 6. Build card
-  // Cover image priority:
-  // 1. Explicitly set cover_image_url (from state)
-  // 2. Generated social preview in .github/social-preview.png
-  // 3. GitHub's auto-generated OG image as final fallback
-  const coverUrl = repo.cover_image_url 
-    || `https://raw.githubusercontent.com/${fullName}/main/.github/social-preview.png`;
+  // Cover image: Use GitHub's OG image service (always works, properly sized)
+  // The .github/social-preview.png files are often too large (5MB+) for Telegram
+  const coverUrl = `https://opengraph.githubassets.com/1/${fullName}`;
   
   // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/718b8e5f-a09b-4467-b116-89440bed2c56',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'card-generator.ts:buildCard',message:'cover URL resolved',data:{repo_name:repo.name,repo_cover_image_url:repo.cover_image_url,final_cover_url:coverUrl,used_fallback:!repo.cover_image_url},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H2'})}).catch(()=>{});
+  fetch('http://127.0.0.1:7242/ingest/718b8e5f-a09b-4467-b116-89440bed2c56',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'card-generator.ts:buildCard',message:'cover URL resolved',data:{repo_name:repo.name,final_cover_url:coverUrl},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H2'})}).catch(()=>{});
   // #endregion
   
   return {
