@@ -155,18 +155,31 @@ async function runScan(ctx: Context, days: number): Promise<void> {
   await stateManager.setActiveScan(scanId);
 
   try {
+    const fetchingMsg = await ctx.reply('🔍 Fetching repos...');
     const repos = await getGitHub().getRecentRepos(days);
     if (repos.length === 0) {
       await stateManager.cancelActiveScan();
-      await ctx.reply(`No repos found with activity in the last ${days} days.`);
+      await ctx.api.editMessageText(ctx.chat!.id, fetchingMsg.message_id, `No repos found with activity in the last ${days} days.`);
       return;
     }
 
-    const progressMsg = await ctx.reply(formatProgress(0, repos.length, 0, 0));
+    const progressMsg = fetchingMsg;
+    await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, formatProgress(0, repos.length, 0, 0));
     const analyzed: TrackedRepo[] = [];
     const errors: string[] = [];
     let cached = 0;
     let timedOut = false;
+    let lastProgressUpdate = 0;
+
+    const updateProgress = async () => {
+      const now = Date.now();
+      if (now - lastProgressUpdate < 500) return; // Rate limit: max 2 updates/sec
+      lastProgressUpdate = now;
+      try {
+        await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
+          formatProgress(analyzed.length + errors.length, repos.length, cached, errors.length));
+      } catch { /* ignore rate limits */ }
+    };
 
     for (let i = 0; i < repos.length; i += 5) {
       if (Date.now() - startTime > TIMEOUT_MS) { timedOut = true; break; }
@@ -188,13 +201,13 @@ async function runScan(ctx: Context, days: number): Promise<void> {
           }
 
           if (tracked.state === 'shipped' || tracked.state === 'dead') {
-            cached++; analyzed.push(tracked); return;
+            cached++; analyzed.push(tracked); await updateProgress(); return;
           }
 
           const hasAnalysis = tracked.analysis !== null;
           const hasNewCommits = new Date(repo.pushed_at).getTime() > (tracked.analyzed_at ? new Date(tracked.analyzed_at).getTime() : 0);
           if (hasAnalysis && !hasNewCommits) {
-            cached++; analyzed.push(tracked); return;
+            cached++; analyzed.push(tracked); await updateProgress(); return;
           }
 
           const analysis = await getAnalyzer().analyzeRepo(owner, name);
@@ -204,15 +217,12 @@ async function runScan(ctx: Context, days: number): Promise<void> {
           tracked.state = verdictToState(analysis.verdict);
           await stateManager.saveTrackedRepo(tracked);
           analyzed.push(tracked);
+          await updateProgress();
         } catch (error) {
           errors.push(`${name}: ${error instanceof Error ? error.message : 'Unknown'}`);
+          await updateProgress();
         }
       }));
-
-      try {
-        await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
-          formatProgress(analyzed.length + errors.length, repos.length, cached, errors.length));
-      } catch { /* ignore */ }
     }
 
     if (await stateManager.getActiveScan() !== scanId) {
