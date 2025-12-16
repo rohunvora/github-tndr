@@ -1,6 +1,9 @@
 import { kv } from '@vercel/kv';
 import { TrackedRepo, RepoState } from './core-types.js';
 
+// Note: Feed memory functions (getFeedMemory, markCardShown, etc.) 
+// are in lib/card-generator.ts to avoid circular dependencies
+
 export class StateManager {
   // ============ TRACKED REPOS ============
 

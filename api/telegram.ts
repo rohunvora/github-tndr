@@ -11,14 +11,29 @@ import { GitHubClient } from '../lib/github.js';
 import { TrackedRepo } from '../lib/core-types.js';
 import {
   formatProgress, formatScanSummary, formatCategoryView, formatStatus, formatAnalysis, formatCursorPrompt,
+  formatRepoCard, formatNoMoreCards, formatDeepDive, formatCompletion,
   GroupedRepos, CategoryKey,
 } from '../lib/bot/format.js';
 import {
   analysisKeyboard, toneKeyboard, nextActionsKeyboard, startKeyboard, retryKeyboard,
   summaryKeyboard, categoryKeyboard,
+  cardKeyboard, afterDoItKeyboard, completionKeyboard, deepDiveKeyboard, noMoreCardsKeyboard,
+  intentionConfirmKeyboard,
 } from '../lib/bot/keyboards.js';
 import { verdictToState, reanalyzeRepo } from '../lib/bot/actions.js';
 import { generateRepoCover } from '../lib/nano-banana.js';
+import { 
+  generateCard, getNextCard, markCardShown, markCardSkipped, 
+  getFeedMemory, saveIntention, clearIntention,
+} from '../lib/card-generator.js';
+import { 
+  generateCursorPromptArtifact, formatCursorPromptMessage,
+  generateCopy, formatCopyMessage,
+  generateLaunchPost, formatLaunchPostMessage,
+  generateDeepDive, formatDeepDiveMessage,
+} from '../lib/ai/index.js';
+import Anthropic from '@anthropic-ai/sdk';
+import { RepoCard } from '../lib/core-types.js';
 
 // ============ BOT SETUP ============
 
@@ -39,6 +54,7 @@ const chatId = process.env.USER_TELEGRAM_CHAT_ID!.trim();
 
 let analyzer: RepoAnalyzer | null = null;
 let github: GitHubClient | null = null;
+let anthropic: Anthropic | null = null;
 
 function getAnalyzer(): RepoAnalyzer {
   if (!analyzer) analyzer = new RepoAnalyzer(process.env.ANTHROPIC_API_KEY!, process.env.GITHUB_TOKEN!);
@@ -50,9 +66,17 @@ function getGitHub(): GitHubClient {
   return github;
 }
 
+function getAnthropic(): Anthropic {
+  if (!anthropic) anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+  return anthropic;
+}
+
 async function showTyping(ctx: Context): Promise<void> {
   if (ctx.chat) await ctx.api.sendChatAction(ctx.chat.id, 'typing');
 }
+
+// Store current card for "Do It" actions
+let currentCardCache: Map<string, RepoCard> = new Map();
 
 // ============ COMMANDS ============
 
@@ -72,21 +96,80 @@ bot.command('start', async (ctx) => {
 
 bot.command('help', async (ctx) => {
   await ctx.reply(`**Commands**
+/next — Get your next task card
 /scan [days] — Analyze repos (default: 10 days)
 /status — See repo counts by state
 /repo <name> — Deep dive on one repo
 /cancel — Cancel running scan
 
+**Feed Actions**
+⚡ Do It — Get a Cursor prompt for the task
+⏭️ Skip — Move to next card
+🔍 Go Deeper — See more context
+
 **Quick Actions**
 Type a repo name to see its full analysis.
-Reply to any analysis with:
-• "done" / "pushed" — Re-analyze after changes
-• "ship" / "shipped" — Mark as launched  
-• "kill" — Remove from tracking
+Reply with "done", "ship", or "kill".
 
 **States**
 🟢 Ready to ship | 🟡 Needs focus | 🔴 No core
 ☠️ Dead | 🚀 Shipped | ⏳ Analyzing`, { parse_mode: 'Markdown' });
+});
+
+// ============ FEED COMMANDS ============
+
+bot.command('next', async (ctx) => {
+  if (ctx.from?.id.toString() !== chatId) return;
+  
+  await showTyping(ctx);
+  
+  try {
+    // Get all tracked repos
+    const repos = await stateManager.getAllTrackedRepos();
+    if (repos.length === 0) {
+      await ctx.reply('No repos tracked yet. Run /scan to get started.', {
+        reply_markup: startKeyboard(),
+      });
+      return;
+    }
+    
+    // Get the next card
+    const card = await getNextCard(getAnthropic(), getGitHub(), repos);
+    
+    if (!card) {
+      await ctx.reply(formatNoMoreCards(), {
+        parse_mode: 'Markdown',
+        reply_markup: noMoreCardsKeyboard(),
+      });
+      return;
+    }
+    
+    // Cache the card for "Do It" action
+    currentCardCache.set(card.full_name, card);
+    
+    // Mark as shown
+    await markCardShown(card.full_name);
+    
+    // Try to send with image
+    try {
+      await ctx.replyWithPhoto(card.cover_image_url, {
+        caption: formatRepoCard(card),
+        parse_mode: 'Markdown',
+        reply_markup: cardKeyboard(card),
+      });
+    } catch {
+      // If image fails, send text only
+      await ctx.reply(formatRepoCard(card), {
+        parse_mode: 'Markdown',
+        reply_markup: cardKeyboard(card),
+      });
+    }
+  } catch (error) {
+    console.error('Error in /next:', error);
+    await ctx.reply(`❌ Failed to get next card: ${error instanceof Error ? error.message : 'Unknown error'}`, {
+      reply_markup: retryKeyboard(),
+    });
+  }
 });
 
 bot.command('scan', async (ctx) => {
@@ -270,7 +353,343 @@ bot.on('callback_query:data', async (ctx) => {
   const [action, ...parts] = ctx.callbackQuery.data.split(':');
   await ctx.answerCallbackQuery();
 
-  // Global actions
+  // ============ CARD ACTIONS ============
+  
+  // card_next - Get next card (same as /next)
+  if (action === 'card_next') {
+    await showTyping(ctx);
+    try {
+      const repos = await stateManager.getAllTrackedRepos();
+      const card = await getNextCard(getAnthropic(), getGitHub(), repos);
+      
+      if (!card) {
+        await ctx.reply(formatNoMoreCards(), {
+          parse_mode: 'Markdown',
+          reply_markup: noMoreCardsKeyboard(),
+        });
+        return;
+      }
+      
+      currentCardCache.set(card.full_name, card);
+      await markCardShown(card.full_name);
+      
+      try {
+        await ctx.replyWithPhoto(card.cover_image_url, {
+          caption: formatRepoCard(card),
+          parse_mode: 'Markdown',
+          reply_markup: cardKeyboard(card),
+        });
+      } catch {
+        await ctx.reply(formatRepoCard(card), {
+          parse_mode: 'Markdown',
+          reply_markup: cardKeyboard(card),
+        });
+      }
+    } catch (error) {
+      await ctx.reply(`❌ Failed: ${error instanceof Error ? error.message : 'Unknown'}`);
+    }
+    return;
+  }
+  
+  // card_doit - Generate artifact based on card's next_step.artifact.type
+  if (action === 'card_doit') {
+    const fullName = parts.join(':'); // owner/name
+    await showTyping(ctx);
+    
+    try {
+      // Get card from cache or regenerate
+      let card = currentCardCache.get(fullName);
+      if (!card) {
+        const [owner, name] = fullName.split('/');
+        const repo = await stateManager.getTrackedRepo(owner, name);
+        if (!repo) {
+          await ctx.reply('Repo not found. Try /next for a new card.');
+          return;
+        }
+        card = await generateCard(getAnthropic(), getGitHub(), repo);
+        currentCardCache.set(fullName, card);
+      }
+      
+      const [owner, name] = fullName.split('/');
+      const artifactType = card.next_step.artifact.type;
+      
+      // Generate appropriate artifact based on type
+      switch (artifactType) {
+        case 'cursor_prompt': {
+          const fileTree = await getGitHub().getRepoTree(owner, name, 50);
+          const readme = await getGitHub().getFileContent(owner, name, 'README.md');
+          
+          const prompt = await generateCursorPromptArtifact(getAnthropic(), {
+            repo_name: name,
+            next_step_action: card.next_step.action,
+            target_files_candidates: fileTree,
+            readme_excerpt: readme || undefined,
+          });
+          
+          await ctx.reply(formatCursorPromptMessage(prompt), {
+            parse_mode: 'Markdown',
+            reply_markup: afterDoItKeyboard(fullName),
+          });
+          break;
+        }
+        
+        case 'copy': {
+          const copy = await generateCopy(getAnthropic(), {
+            potential: card.potential,
+            cta_style: 'direct_link',
+            product_url: `https://${name}.vercel.app`,
+          });
+          
+          await ctx.reply(formatCopyMessage(copy), {
+            parse_mode: 'Markdown',
+            reply_markup: afterDoItKeyboard(fullName),
+          });
+          break;
+        }
+        
+        case 'launch_post': {
+          const post = await generateLaunchPost(getAnthropic(), {
+            potential: card.potential,
+            product_url: `https://${name}.vercel.app`,
+            platform: 'x',
+          });
+          
+          await ctx.reply(formatLaunchPostMessage(post), {
+            parse_mode: 'Markdown',
+            reply_markup: afterDoItKeyboard(fullName),
+          });
+          break;
+        }
+        
+        case 'checklist': {
+          // Generate a simple checklist for config/env tasks
+          const checklist = `**☑️ Checklist: ${card.next_step.action}**
+
+☐ Check environment variables are set
+☐ Verify configuration files
+☐ Test locally
+☐ Deploy and verify
+
+_Mark done when complete._`;
+          
+          await ctx.reply(checklist, {
+            parse_mode: 'Markdown',
+            reply_markup: afterDoItKeyboard(fullName),
+          });
+          break;
+        }
+        
+        case 'command': {
+          // Show command to run
+          await ctx.reply(`**🖥️ Command to run:**\n\n\`\`\`\n${card.next_step.action}\n\`\`\`\n\n_Run this and mark done._`, {
+            parse_mode: 'Markdown',
+            reply_markup: afterDoItKeyboard(fullName),
+          });
+          break;
+        }
+        
+        default: {
+          // Fallback to cursor prompt
+          const fileTree = await getGitHub().getRepoTree(owner, name, 50);
+          const readme = await getGitHub().getFileContent(owner, name, 'README.md');
+          
+          const prompt = await generateCursorPromptArtifact(getAnthropic(), {
+            repo_name: name,
+            next_step_action: card.next_step.action,
+            target_files_candidates: fileTree,
+            readme_excerpt: readme || undefined,
+          });
+          
+          await ctx.reply(formatCursorPromptMessage(prompt), {
+            parse_mode: 'Markdown',
+            reply_markup: afterDoItKeyboard(fullName),
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error in card_doit:', error);
+      await ctx.reply(`❌ Failed to generate artifact: ${error instanceof Error ? error.message : 'Unknown'}`);
+    }
+    return;
+  }
+  
+  // card_skip - Skip this card, get next
+  if (action === 'card_skip') {
+    const fullName = parts.join(':');
+    await markCardSkipped(fullName);
+    currentCardCache.delete(fullName);
+    
+    // Automatically get next card
+    await showTyping(ctx);
+    try {
+      const repos = await stateManager.getAllTrackedRepos();
+      const card = await getNextCard(getAnthropic(), getGitHub(), repos);
+      
+      if (!card) {
+        await ctx.reply(formatNoMoreCards(), {
+          parse_mode: 'Markdown',
+          reply_markup: noMoreCardsKeyboard(),
+        });
+        return;
+      }
+      
+      currentCardCache.set(card.full_name, card);
+      await markCardShown(card.full_name);
+      
+      try {
+        await ctx.replyWithPhoto(card.cover_image_url, {
+          caption: formatRepoCard(card),
+          parse_mode: 'Markdown',
+          reply_markup: cardKeyboard(card),
+        });
+      } catch {
+        await ctx.reply(formatRepoCard(card), {
+          parse_mode: 'Markdown',
+          reply_markup: cardKeyboard(card),
+        });
+      }
+    } catch (error) {
+      await ctx.reply(`❌ Failed: ${error instanceof Error ? error.message : 'Unknown'}`);
+    }
+    return;
+  }
+  
+  // card_done - Mark task done, get next card
+  if (action === 'card_done') {
+    const fullName = parts.join(':');
+    await clearIntention(fullName);
+    currentCardCache.delete(fullName);
+    
+    await ctx.reply(`✅ Nice work! Getting your next card...`);
+    
+    // Get next card
+    await showTyping(ctx);
+    try {
+      const repos = await stateManager.getAllTrackedRepos();
+      const card = await getNextCard(getAnthropic(), getGitHub(), repos);
+      
+      if (!card) {
+        await ctx.reply(formatNoMoreCards(), {
+          parse_mode: 'Markdown',
+          reply_markup: noMoreCardsKeyboard(),
+        });
+        return;
+      }
+      
+      currentCardCache.set(card.full_name, card);
+      await markCardShown(card.full_name);
+      
+      try {
+        await ctx.replyWithPhoto(card.cover_image_url, {
+          caption: formatRepoCard(card),
+          parse_mode: 'Markdown',
+          reply_markup: cardKeyboard(card),
+        });
+      } catch {
+        await ctx.reply(formatRepoCard(card), {
+          parse_mode: 'Markdown',
+          reply_markup: cardKeyboard(card),
+        });
+      }
+    } catch (error) {
+      await ctx.reply(`❌ Failed: ${error instanceof Error ? error.message : 'Unknown'}`);
+    }
+    return;
+  }
+  
+  // card_deeper - Show deep dive view with AI-generated next steps
+  if (action === 'card_deeper') {
+    const fullName = parts.join(':');
+    await showTyping(ctx);
+    
+    try {
+      let card = currentCardCache.get(fullName);
+      const [owner, name] = fullName.split('/');
+      
+      if (!card) {
+        const repo = await stateManager.getTrackedRepo(owner, name);
+        if (!repo) {
+          await ctx.reply('Repo not found.');
+          return;
+        }
+        card = await generateCard(getAnthropic(), getGitHub(), repo);
+        currentCardCache.set(fullName, card);
+      }
+      
+      // Get additional context for deep dive
+      const [readme, fileTree] = await Promise.all([
+        getGitHub().getFileContent(owner, name, 'README.md'),
+        getGitHub().getRepoTree(owner, name, 30),
+      ]);
+      
+      // Generate full deep dive with AI
+      const deepDive = await generateDeepDive(getAnthropic(), {
+        repo_card: card,
+        readme_excerpt: readme || undefined,
+        file_tree: fileTree,
+      });
+      
+      const deployUrl = card.stage === 'ready_to_launch' || card.stage === 'post_launch' 
+        ? `https://${name}.vercel.app` 
+        : null;
+      
+      const deepDiveText = formatDeepDiveMessage(deepDive, name, deployUrl);
+      
+      await ctx.reply(deepDiveText, {
+        parse_mode: 'Markdown',
+        reply_markup: deepDiveKeyboard(fullName),
+      });
+    } catch (error) {
+      console.error('Error in card_deeper:', error);
+      await ctx.reply(`❌ Failed: ${error instanceof Error ? error.message : 'Unknown'}`);
+    }
+    return;
+  }
+  
+  // card_shipped - Mark repo as shipped
+  if (action === 'card_shipped') {
+    const fullName = parts.join(':');
+    const [owner, name] = fullName.split('/');
+    
+    await stateManager.updateRepoState(owner, name, 'shipped');
+    await clearIntention(fullName);
+    currentCardCache.delete(fullName);
+    
+    await ctx.reply(`🚀 **${name}** shipped! Congrats!\n\nReply with traction like "50 likes" or feedback to keep the momentum going.`, {
+      parse_mode: 'Markdown',
+      reply_markup: nextActionsKeyboard(),
+    });
+    return;
+  }
+  
+  // card_live - Open live URL
+  if (action === 'card_live') {
+    const fullName = parts.join(':');
+    const [, name] = fullName.split('/');
+    const url = `https://${name}.vercel.app`;
+    await ctx.reply(`🔗 **${name}** live at:\n${url}`, { parse_mode: 'Markdown' });
+    return;
+  }
+  
+  // intention_confirm - Confirm intention reminder
+  if (action === 'intention_confirm') {
+    const fullName = parts[0] + ':' + parts[1]; // owner/name
+    const encodedAction = parts.slice(2).join(':');
+    const action_text = decodeURIComponent(encodedAction);
+    
+    await saveIntention(fullName, action_text, 24);
+    await ctx.reply(`✅ Got it! I'll remind you about "${action_text}" tomorrow if there's no activity.`);
+    return;
+  }
+  
+  // intention_cancel - Cancel intention
+  if (action === 'intention_cancel') {
+    await ctx.reply(`👍 No reminder set.`);
+    return;
+  }
+
+  // ============ GLOBAL ACTIONS ============
+  
   if (action === 'quickscan') { await runScan(ctx, 10); return; }
   if (action === 'showstatus') {
     await ctx.reply(formatStatus(await stateManager.getRepoCounts()), {

@@ -1,5 +1,5 @@
 import { InlineKeyboard } from 'grammy';
-import { TrackedRepo } from '../core-types.js';
+import { TrackedRepo, RepoCard } from '../core-types.js';
 import { GroupedRepos, CategoryKey } from './format.js';
 
 export function summaryKeyboard(groups: GroupedRepos): InlineKeyboard {
@@ -120,4 +120,83 @@ export function startKeyboard(): InlineKeyboard {
 
 export function retryKeyboard(): InlineKeyboard {
   return new InlineKeyboard().text('🔄 Retry', 'quickscan');
+}
+
+// ============ FEED CARD KEYBOARDS ============
+
+/**
+ * Main card keyboard with Do It / Skip / Go Deeper
+ */
+export function cardKeyboard(card: RepoCard): InlineKeyboard {
+  const id = card.full_name; // owner/name
+  const kb = new InlineKeyboard();
+  
+  // Primary action row
+  kb.text('⚡ Do It', `card_doit:${id}`);
+  kb.text('⏭️ Skip', `card_skip:${id}`);
+  kb.row();
+  
+  // Secondary actions
+  kb.text('🔍 Go Deeper', `card_deeper:${id}`);
+  
+  return kb;
+}
+
+/**
+ * Keyboard after "Do It" - shows the artifact was generated
+ */
+export function afterDoItKeyboard(fullName: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('✅ Done, Next Card', `card_done:${fullName}`)
+    .text('🔄 Regenerate', `card_doit:${fullName}`);
+}
+
+/**
+ * Keyboard for completion message (after push detected)
+ */
+export function completionKeyboard(fullName: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('👀 See It Live', `card_live:${fullName}`)
+    .text('⏭️ Next Card', `card_next`)
+    .row()
+    .text('🔍 Go Deeper', `card_deeper:${fullName}`)
+    .text('🚀 Mark Shipped', `card_shipped:${fullName}`);
+}
+
+/**
+ * Keyboard for deep dive view
+ */
+export function deepDiveKeyboard(fullName: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('⬅️ Back to Feed', `card_next`)
+    .text('🚀 Mark Shipped', `card_shipped:${fullName}`);
+}
+
+/**
+ * Keyboard for "no more cards" state
+ */
+export function noMoreCardsKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('🔍 Scan for New Repos', 'quickscan')
+    .text('📋 View All', 'listall');
+}
+
+/**
+ * Keyboard for morning stack
+ */
+export function morningStackKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('⚡ Start First Card', 'card_next')
+    .text('📋 View All', 'listall');
+}
+
+/**
+ * Keyboard for intention confirmation
+ */
+export function intentionConfirmKeyboard(fullName: string, action: string): InlineKeyboard {
+  // Encode action in callback data (truncated if too long)
+  const encodedAction = encodeURIComponent(action.slice(0, 50));
+  return new InlineKeyboard()
+    .text('✅ Yes, remind me', `intention_confirm:${fullName}:${encodedAction}`)
+    .text('❌ No', `intention_cancel:${fullName}`);
 }

@@ -13,6 +13,159 @@ export type RepoState =
 
 export type Verdict = 'ship' | 'cut_to_core' | 'no_core' | 'dead';
 
+// ============ PROJECT STAGE (for feed) ============
+
+export type ProjectStage = 'building' | 'packaging' | 'ready_to_launch' | 'post_launch';
+
+// ============ FEED TYPES ============
+
+export interface RepoPotential {
+  potential: string;      // Aspirational one-liner (tweetable)
+  icp: string;            // Ideal customer profile
+  promise: string;        // Concrete outcome
+  positioning_angle: string;
+  confidence: 'high' | 'medium' | 'low';
+  prompt_version: string;
+}
+
+export interface LastContext {
+  last_context: string;   // 1 sentence summary
+  last_work_order_status: 'open' | 'done' | 'unknown';
+  confidence: 'high' | 'medium' | 'low';
+}
+
+export type NextStepSource = 'readme_todo' | 'user_stated' | 'deploy_state' | 'commit_gap' | 'ai_inferred';
+export type ArtifactType = 'cursor_prompt' | 'copy' | 'checklist' | 'command' | 'launch_post' | 'none';
+
+export interface NextStep {
+  action: string;
+  source: NextStepSource;
+  artifact: {
+    type: ArtifactType;
+    reason: string;
+  };
+  why_this_now: string;
+  blocking_question: string | null;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+export interface RepoCard {
+  repo: string;
+  full_name: string;
+  cover_image_url: string;
+  potential: RepoPotential;
+  last_context: LastContext;
+  next_step: NextStep;
+  priority_score: number;
+  stage: ProjectStage;
+}
+
+export interface FeedMemory {
+  shown_today: string[];           // repo full_names
+  skipped_today: string[];
+  active_card: string | null;      // current repo being worked on
+  last_reset: string;              // ISO date for daily reset
+  intentions: Record<string, {
+    action: string;
+    stated_at: string;
+    remind_after: string;
+  }>;
+}
+
+export interface DeployState {
+  status: 'green' | 'red' | 'unknown';
+  url?: string;
+  error_excerpt?: string;
+}
+
+export interface PackagingChecks {
+  has_clear_cta: boolean;
+  has_demo_asset: boolean;
+  has_readme_image: boolean;
+}
+
+// ============ AI FUNCTION INPUT/OUTPUT SCHEMAS ============
+
+export const RepoPotentialInputSchema = z.object({
+  repo_name: z.string(),
+  repo_description: z.string(),
+  readme_excerpt: z.string(),
+  tech_stack: z.array(z.string()),
+  known_audience_context: z.string().optional(),
+});
+
+export const RepoPotentialOutputSchema = z.object({
+  potential: z.string(),
+  icp: z.string(),
+  promise: z.string(),
+  positioning_angle: z.string(),
+  confidence: z.enum(['high', 'medium', 'low']),
+  prompt_version: z.string(),
+});
+
+export const LastContextInputSchema = z.object({
+  recent_commits: z.array(z.object({
+    sha: z.string(),
+    message: z.string(),
+    files_changed: z.array(z.string()),
+  })),
+  last_bot_interaction: z.string().optional(),
+  open_intention: z.object({
+    action: z.string(),
+    stated_at: z.string(),
+  }).optional(),
+});
+
+export const LastContextOutputSchema = z.object({
+  last_context: z.string(),
+  last_work_order_status: z.enum(['open', 'done', 'unknown']),
+  confidence: z.enum(['high', 'medium', 'low']),
+});
+
+export const NextStepInputSchema = z.object({
+  readme_todos: z.array(z.string()),
+  stated_intention: z.object({ action: z.string() }).optional(),
+  deploy_state: z.object({
+    status: z.enum(['green', 'red', 'unknown']),
+    url: z.string().optional(),
+    error_excerpt: z.string().optional(),
+  }),
+  packaging_checks: z.object({
+    has_clear_cta: z.boolean(),
+    has_demo_asset: z.boolean(),
+    has_readme_image: z.boolean(),
+  }),
+  project_stage: z.enum(['building', 'packaging', 'ready_to_launch', 'post_launch']),
+  recent_activity_summary: z.string(),
+  potential: RepoPotentialOutputSchema,
+});
+
+export const NextStepOutputSchema = z.object({
+  next_step: z.object({
+    action: z.string(),
+    source: z.enum(['readme_todo', 'user_stated', 'deploy_state', 'commit_gap', 'ai_inferred']),
+    artifact: z.object({
+      type: z.enum(['cursor_prompt', 'copy', 'checklist', 'command', 'launch_post', 'none']),
+      reason: z.string(),
+    }),
+  }),
+  why_this_now: z.string(),
+  blocking_question: z.string().nullable(),
+  confidence: z.enum(['high', 'medium', 'low']),
+});
+
+export const CursorPromptOutputSchema = z.object({
+  title: z.string(),
+  cursor_prompt: z.string(),
+  target_files: z.array(z.string()),
+  acceptance_criteria: z.array(z.string()),
+});
+
+export const WhatChangedOutputSchema = z.object({
+  what_changed: z.string(),
+  matches_expected: z.enum(['yes', 'no', 'unknown']),
+});
+
 // ============ CORE ANALYSIS (LLM Output) ============
 
 export const CoreAnalysisSchema = z.object({

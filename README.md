@@ -3,6 +3,8 @@
   <p><strong>AI-powered Telegram bot that analyzes your GitHub repos and tells you whether to ship, focus, or kill each project</strong></p>
   <p>
     <a href="https://github-tndr.vercel.app"><strong>🚀 Live Demo</strong></a>
+    ·
+    <a href="LICENSE">MIT License</a>
   </p>
 </div>
 
@@ -75,7 +77,7 @@ Bot: Ready to ship! Here's your launch tweet:
 
 2. **Environment variables**
    ```bash
-   cp env.example.txt .env.local
+   cp .env.example .env.local
    ```
    Fill in:
    - `TELEGRAM_BOT_TOKEN` - Get from [@BotFather](https://t.me/botfather)
