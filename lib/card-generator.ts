@@ -248,9 +248,12 @@ export async function generateCard(
   const priority = calculatePriority(repo, memory);
   
   // 6. Build card
-  // Cover image: Use GitHub's OG image service (always works, properly sized)
-  // The .github/social-preview.png files are often too large (5MB+) for Telegram
-  const coverUrl = `https://opengraph.githubassets.com/1/${fullName}`;
+  // Cover image priority:
+  // 1. Use our generated social-preview.png, resized via wsrv.nl proxy (original is 5MB+)
+  // 2. Fall back to GitHub's OG image if no custom preview exists
+  const rawImageUrl = `https://raw.githubusercontent.com/${fullName}/main/.github/social-preview.png`;
+  // wsrv.nl resizes images on the fly - 1200x630 is optimal for social previews
+  const coverUrl = `https://wsrv.nl/?url=${encodeURIComponent(rawImageUrl)}&w=1200&h=630&fit=cover&output=jpg&q=85`;
   
   // #region agent log
   fetch('http://127.0.0.1:7242/ingest/718b8e5f-a09b-4467-b116-89440bed2c56',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'card-generator.ts:buildCard',message:'cover URL resolved',data:{repo_name:repo.name,final_cover_url:coverUrl},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H2'})}).catch(()=>{});
