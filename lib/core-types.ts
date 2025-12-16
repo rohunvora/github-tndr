@@ -45,6 +45,7 @@ export interface TrackedRepo {
   last_push_at: string | null;
   killed_at: string | null;
   shipped_at: string | null;
+  cover_image_url: string | null;
 }
 
 // ============ VALIDATION ============

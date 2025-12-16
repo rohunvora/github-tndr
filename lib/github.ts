@@ -8,6 +8,9 @@ export interface GitHubRepo {
   default_branch: string;
   homepage: string | null;
   topics: string[];
+  private: boolean;
+  stargazers_count: number;
+  size: number;
 }
 
 export interface GitHubCommit {
@@ -146,5 +149,74 @@ export class GitHubClient {
     const allRepos = await this.getUserRepos();
     const cutoff = Date.now() - days * 86400000;
     return allRepos.filter(repo => new Date(repo.pushed_at).getTime() >= cutoff);
+  }
+
+  async getPublicRepos(days = 150): Promise<GitHubRepo[]> {
+    // Fetch multiple pages to get enough repos for 150 days
+    const allRepos: GitHubRepo[] = [];
+    const cutoff = Date.now() - days * 86400000;
+    
+    for (let page = 1; page <= 3; page++) {
+      const repos = await this.request<GitHubRepo[]>(
+        `/user/repos?sort=pushed&per_page=100&page=${page}&visibility=public`
+      );
+      if (repos.length === 0) break;
+      
+      const filtered = repos.filter(repo => 
+        !repo.name.includes('.github') && 
+        !repo.private &&
+        new Date(repo.pushed_at).getTime() >= cutoff
+      );
+      allRepos.push(...filtered);
+      
+      // If the last repo is older than cutoff, we have enough
+      if (repos.length < 100 || new Date(repos[repos.length - 1].pushed_at).getTime() < cutoff) {
+        break;
+      }
+    }
+    
+    return allRepos;
+  }
+
+  async getOwnedRepos(days = 150, includePrivate = true): Promise<GitHubRepo[]> {
+    // Fetch repos where user is the owner (public + private with no collaborators)
+    const allRepos: GitHubRepo[] = [];
+    const cutoff = Date.now() - days * 86400000;
+    
+    for (let page = 1; page <= 5; page++) {
+      const repos = await this.request<GitHubRepo[]>(
+        `/user/repos?sort=pushed&per_page=100&page=${page}&affiliation=owner`
+      );
+      if (repos.length === 0) break;
+      
+      for (const repo of repos) {
+        // Skip .github repos and repos older than cutoff
+        if (repo.name.includes('.github')) continue;
+        if (new Date(repo.pushed_at).getTime() < cutoff) continue;
+        
+        // For private repos, check if there are collaborators
+        if (repo.private && includePrivate) {
+          try {
+            const collaborators = await this.request<Array<{ id: number }>>(
+              `/repos/${repo.full_name}/collaborators?per_page=10`
+            );
+            // If more than 1 collaborator (just the owner), skip
+            if (collaborators.length > 1) continue;
+          } catch {
+            // If we can't check collaborators, skip to be safe
+            continue;
+          }
+        }
+        
+        allRepos.push(repo);
+      }
+      
+      // If the last repo is older than cutoff, we have enough
+      if (repos.length < 100 || new Date(repos[repos.length - 1].pushed_at).getTime() < cutoff) {
+        break;
+      }
+    }
+    
+    return allRepos;
   }
 }

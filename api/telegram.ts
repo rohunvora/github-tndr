@@ -3,7 +3,7 @@ export const config = {
   maxDuration: 60,
 };
 
-import { Bot, InlineKeyboard, Context } from 'grammy';
+import { Bot, InlineKeyboard, Context, InputFile } from 'grammy';
 import type { Update, UserFromGetMe } from 'grammy/types';
 import { RepoAnalyzer } from '../lib/analyzer.js';
 import { stateManager } from '../lib/state.js';
@@ -18,6 +18,7 @@ import {
   summaryKeyboard, categoryKeyboard,
 } from '../lib/bot/keyboards.js';
 import { verdictToState, reanalyzeRepo } from '../lib/bot/actions.js';
+import { generateRepoCover } from '../lib/nano-banana.js';
 
 // ============ BOT SETUP ============
 
@@ -131,6 +132,7 @@ bot.command('repo', async (ctx) => {
       analysis, analyzed_at: new Date().toISOString(),
       pending_action: null, pending_since: null, last_message_id: null,
       last_push_at: repo.pushed_at, killed_at: null, shipped_at: null,
+      cover_image_url: null,
     };
     await stateManager.saveTrackedRepo(tracked);
 
@@ -197,6 +199,7 @@ async function runScan(ctx: Context, days: number): Promise<void> {
               id: `${owner}/${name}`, name, owner, state: 'analyzing',
               analysis: null, analyzed_at: null, pending_action: null, pending_since: null,
               last_message_id: null, last_push_at: repo.pushed_at, killed_at: null, shipped_at: null,
+              cover_image_url: null,
             };
           }
 
@@ -334,6 +337,7 @@ bot.on('callback_query:data', async (ctx) => {
         analysis, analyzed_at: new Date().toISOString(),
         pending_action: null, pending_since: null, last_message_id: null,
         last_push_at: found.pushed_at, killed_at: null, shipped_at: null,
+        cover_image_url: null,
       };
       await stateManager.saveTrackedRepo(tracked);
       const msg = await ctx.reply(formatAnalysis(tracked), { parse_mode: 'Markdown', reply_markup: analysisKeyboard(tracked) });
@@ -429,6 +433,29 @@ bot.on('callback_query:data', async (ctx) => {
         });
       } catch (error) {
         await ctx.reply(`❌ Failed: ${error instanceof Error ? error.message : 'Unknown'}`);
+      }
+      break;
+
+    case 'cover':
+      try {
+        // Show upload action while generating
+        if (ctx.chat) await ctx.api.sendChatAction(ctx.chat.id, 'upload_photo');
+        
+        // Generate cover image
+        const imageBuffer = await generateRepoCover(repo);
+        
+        // Send the photo
+        await ctx.replyWithPhoto(new InputFile(imageBuffer, `${name}-cover.png`), {
+          caption: `🎨 **${name}** cover\n\n${repo.analysis?.one_liner || ''}`,
+          parse_mode: 'Markdown',
+          reply_markup: new InlineKeyboard()
+            .text('🔄 Regenerate', `cover:${owner}:${name}`)
+            .text('📋 Back to Analysis', `repo:${owner}:${name}`),
+        });
+      } catch (error) {
+        await ctx.reply(`❌ Cover generation failed: ${error instanceof Error ? error.message : 'Unknown'}`, {
+          reply_markup: new InlineKeyboard().text('🔄 Retry', `cover:${owner}:${name}`),
+        });
       }
       break;
   }

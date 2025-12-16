@@ -85,6 +85,13 @@ export function analysisKeyboard(repo: TrackedRepo): InlineKeyboard {
       break;
   }
 
+  // Add cover image button for repos with analysis
+  if (repo.analysis?.has_core) {
+    kb.row();
+    const coverLabel = repo.cover_image_url ? '🖼️ View Cover' : '🎨 Generate Cover';
+    kb.text(coverLabel, `cover:${id}`);
+  }
+
   return kb;
 }
 
