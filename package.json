@@ -1,7 +1,7 @@
 {
-  "name": "relentless-project-pusher",
-  "version": "1.0.0",
-  "description": "Relentless Telegram bot that pushes you to ship",
+  "name": "ship-or-kill-bot",
+  "version": "2.0.0",
+  "description": "Telegram bot that analyzes your repos and helps you ship or kill them",
   "scripts": {
     "dev": "vercel dev"
   },
@@ -9,7 +9,8 @@
     "@anthropic-ai/sdk": "^0.24.0",
     "@vercel/kv": "^0.2.1",
     "dotenv": "^17.2.3",
-    "grammy": "^1.24.0"
+    "grammy": "^1.24.0",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

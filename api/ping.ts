@@ -3,5 +3,5 @@ export const config = {
 };
 
 export default function handler() {
-  return new Response('pong v2 - with GTM pipeline');
+  return new Response('pong - Ship or Kill Bot v2.0');
 }

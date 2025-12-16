@@ -1,14 +1,14 @@
 export const config = {
   runtime: 'edge',
+  maxDuration: 60, // Allow longer execution for scans
 };
 
-import { Bot, InlineKeyboard, InputFile } from 'grammy';
+import { Bot, InlineKeyboard } from 'grammy';
 import type { Update, UserFromGetMe } from 'grammy/types';
-import { Collector, ProjectSnapshot } from '../lib/collector.js';
-import { Reasoner, ProjectAssessment, ConversationMessage } from '../lib/reasoner.js';
-import { profileManager } from '../lib/profile.js';
+import { RepoAnalyzer } from '../lib/analyzer.js';
 import { stateManager } from '../lib/state.js';
-import { EvidenceRef } from '../lib/types.js';
+import { GitHubClient } from '../lib/github.js';
+import { TrackedRepo, CoreAnalysis, RepoState } from '../lib/core-types.js';
 
 // ============ BOT SETUP ============
 
@@ -17,8 +17,8 @@ function getBotInfo(token: string): UserFromGetMe {
   return {
     id: botId,
     is_bot: true,
-    first_name: 'Pusher',
-    username: 'pusher_bot',
+    first_name: 'ShipBot',
+    username: 'ship_or_kill_bot',
     can_join_groups: true,
     can_read_all_group_messages: false,
     supports_inline_queries: false,
@@ -27,519 +27,534 @@ function getBotInfo(token: string): UserFromGetMe {
   };
 }
 
-const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN!, { botInfo: getBotInfo(process.env.TELEGRAM_BOT_TOKEN!) });
+const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN!, {
+  botInfo: getBotInfo(process.env.TELEGRAM_BOT_TOKEN!),
+});
+
 const chatId = process.env.USER_TELEGRAM_CHAT_ID!.trim();
 
-const collector = new Collector(
-  process.env.GITHUB_TOKEN!,
-  process.env.VERCEL_TOKEN!,
-  process.env.VERCEL_TEAM_ID
-);
+// Initialize clients lazily
+let analyzer: RepoAnalyzer | null = null;
+let github: GitHubClient | null = null;
 
-const reasoner = new Reasoner(
-  process.env.ANTHROPIC_API_KEY!,
-  process.env.VERCEL_TEAM_ID
-);
+function getAnalyzer(): RepoAnalyzer {
+  if (!analyzer) {
+    analyzer = new RepoAnalyzer(
+      process.env.ANTHROPIC_API_KEY!,
+      process.env.GITHUB_TOKEN!
+    );
+  }
+  return analyzer;
+}
+
+function getGitHub(): GitHubClient {
+  if (!github) {
+    github = new GitHubClient(process.env.GITHUB_TOKEN!);
+  }
+  return github;
+}
 
 // ============ MESSAGE FORMATTING ============
 
-function formatMainMessage(snapshot: ProjectSnapshot, assessment: ProjectAssessment): string {
-  const stage = formatGTMStage(snapshot.gtmStage);
-  const action = assessment.nextAction;
-  
-  let msg = `**${snapshot.name}** ${stage}\n\n`;
-  
-  // Add evidence-backed issue
-  if (assessment.primaryShortcoming) {
-    msg += `${assessment.primaryShortcoming.issue}\n`;
-    
-    // Add evidence excerpt if available
-    const evidence = assessment.primaryShortcoming.evidence[0];
-    if (evidence) {
-      if (evidence.kind === 'vercel_log') {
-        msg += `\`\`\`\n${evidence.excerpt.substring(0, 200)}\n\`\`\`\n`;
-      } else if (evidence.kind === 'env_diff') {
-        msg += `Missing: \`${evidence.missing.slice(0, 3).join('`, `')}\`\n`;
-      }
+function formatAnalysisMessage(
+  repo: TrackedRepo,
+  sequenceNum?: number,
+  totalRepos?: number
+): string {
+  const analysis = repo.analysis;
+  if (!analysis) {
+    return `━━━ ${repo.name} ━━━\nAnalysis failed.`;
+  }
+
+  const seqPrefix = sequenceNum && totalRepos ? `[${sequenceNum}/${totalRepos}] ` : '';
+  const stateEmoji = getStateEmoji(repo.state);
+
+  let msg = `${seqPrefix}━━━ ${repo.name} ━━━\n`;
+  msg += `${stateEmoji} ${analysis.one_liner}\n\n`;
+  msg += `${analysis.what_it_does}\n\n`;
+
+  if (analysis.has_core && analysis.core_value) {
+    msg += `**Core:** ${analysis.core_value}\n`;
+    if (analysis.why_core) {
+      msg += `**Why:** ${analysis.why_core}\n`;
+    }
+  }
+
+  if (analysis.cut.length > 0) {
+    msg += `\n**Cut:** ${analysis.cut.slice(0, 5).join(', ')}`;
+    if (analysis.cut.length > 5) {
+      msg += ` (+${analysis.cut.length - 5} more)`;
     }
     msg += '\n';
   }
-  
-  // Add deploy URL
-  if (snapshot.deployment.url) {
-    msg += `🔗 ${snapshot.deployment.url}\n\n`;
+
+  msg += `\n**Verdict:** ${analysis.verdict}\n`;
+  msg += `_${analysis.verdict_reason}_\n`;
+
+  if (analysis.tweet_draft) {
+    msg += `\n**Tweet:**\n\`\`\`\n${analysis.tweet_draft}\n\`\`\``;
   }
-  
-  // Add the ONE question
-  msg += formatQuestion(action);
-  
+
   return msg;
 }
 
-function formatGTMStage(stage: string): string {
-  switch (stage) {
-    case 'building': return '🔨 Building';
-    case 'packaging': return '📦 Packaging';
-    case 'ready_to_launch': return '🚀 Ready to Launch';
-    case 'launching': return '📣 Launching';
-    case 'post_launch': return '📊 Post-Launch';
-    default: return '';
+function getStateEmoji(state: RepoState): string {
+  switch (state) {
+    case 'ready': return '🟢';
+    case 'shipped': return '🚀';
+    case 'has_core': return '🟡';
+    case 'no_core': return '🔴';
+    case 'dead': return '☠️';
+    case 'analyzing': return '⏳';
+    default: return '⚪';
   }
 }
 
-function formatQuestion(action: { action: string; artifact: string }): string {
-  switch (action.artifact) {
-    case 'cursor_prompt':
-      return `Want a Cursor prompt to fix this?`;
-    case 'launch_post':
-      return `Ready to post? I can draft the announcement.`;
-    case 'landing_copy':
-      return `Want me to draft the landing copy?`;
-    case 'env_checklist':
-      return `Need the env var checklist?`;
-    default:
-      return `What's next?`;
-  }
-}
-
-function formatArtifactMessage(assessment: ProjectAssessment): string | null {
-  const { artifacts } = assessment;
-  
-  if (artifacts.cursorPrompt) {
-    return `**Cursor Prompt:**\n\n${artifacts.cursorPrompt}`;
-  }
-  if (artifacts.launchPost) {
-    return `**Launch Post:**\n\n${artifacts.launchPost}`;
-  }
-  if (artifacts.landingCopy) {
-    return `**Landing Copy:**\n\n${artifacts.landingCopy}`;
-  }
-  if (artifacts.envChecklist) {
-    return artifacts.envChecklist;
-  }
-  
-  return null;
-}
-
-function createKeyboard(snapshot: ProjectSnapshot, assessment: ProjectAssessment): InlineKeyboard {
+function createAnalysisKeyboard(repo: TrackedRepo): InlineKeyboard {
   const keyboard = new InlineKeyboard();
-  
-  // Primary action based on artifact type
-  switch (assessment.nextAction.artifact) {
-    case 'cursor_prompt':
-      keyboard.text('📝 Get Cursor Prompt', `prompt:${snapshot.name}`);
+  const repoId = `${repo.owner}:${repo.name}`;
+  const analysis = repo.analysis;
+
+  if (!analysis) {
+    keyboard.text('🔄 Retry', `retry:${repoId}`);
+    return keyboard;
+  }
+
+  switch (analysis.verdict) {
+    case 'ship':
+      keyboard.text('🚀 Post this', `ship:${repoId}`);
+      keyboard.text('✏️ Edit tweet', `edit:${repoId}`);
+      keyboard.row();
+      keyboard.text('⏸️ Not yet', `skip:${repoId}`);
       break;
-    case 'launch_post':
-      keyboard.text('📣 Draft Post', `post:${snapshot.name}`);
+
+    case 'cut_to_core':
+      keyboard.text('✂️ Cut to core', `cut:${repoId}`);
+      keyboard.text('🚀 Ship as-is', `ship:${repoId}`);
+      keyboard.row();
+      keyboard.text('☠️ Kill', `kill:${repoId}`);
       break;
-    case 'landing_copy':
-      keyboard.text('📄 Draft Copy', `copy:${snapshot.name}`);
+
+    case 'no_core':
+      keyboard.text('🔍 Dig deeper', `deeper:${repoId}`);
+      keyboard.text('☠️ Kill', `kill:${repoId}`);
       break;
-    case 'env_checklist':
-      keyboard.text('📋 Show Checklist', `env:${snapshot.name}`);
+
+    case 'dead':
+      keyboard.text('☠️ Kill', `kill:${repoId}`);
+      keyboard.text('🔄 Revive', `revive:${repoId}`);
       break;
   }
-  
-  keyboard.row();
-  keyboard.text('😴 Snooze 24h', `snooze:${snapshot.name}`);
-  keyboard.text('✅ Done', `done:${snapshot.name}`);
-  
+
   return keyboard;
 }
 
-// ============ SEND HELPERS ============
+function formatCursorPrompt(repo: TrackedRepo): string {
+  const analysis = repo.analysis;
+  if (!analysis) return 'No analysis available.';
 
-async function sendSnapshot(
-  chatIdToSend: string,
-  snapshot: ProjectSnapshot,
-  assessment: ProjectAssessment
-): Promise<void> {
-  const mainMessage = formatMainMessage(snapshot, assessment);
-  const keyboard = createKeyboard(snapshot, assessment);
-  
-  // Try to send with screenshot
-  if (snapshot.screenshot.url) {
-    try {
-      const imageResponse = await fetch(snapshot.screenshot.url);
-      if (imageResponse.ok) {
-        const imageBuffer = await imageResponse.arrayBuffer();
-        await bot.api.sendPhoto(chatIdToSend, new InputFile(new Uint8Array(imageBuffer)), {
-          caption: mainMessage,
-          parse_mode: 'Markdown',
-          reply_markup: keyboard,
-        });
-        return;
-      }
-    } catch (error) {
-      console.error('Failed to send screenshot:', error);
-    }
-  }
-  
-  // Fallback to text-only
-  await bot.api.sendMessage(chatIdToSend, mainMessage, {
-    parse_mode: 'Markdown',
-    reply_markup: keyboard,
-  });
-}
+  const deleteList = analysis.cut.map(f => `- ${f}`).join('\n');
+  const keepList = analysis.keep.join(', ');
 
-async function sendArtifact(chatIdToSend: string, assessment: ProjectAssessment): Promise<void> {
-  const artifactMessage = formatArtifactMessage(assessment);
-  if (artifactMessage) {
-    await bot.api.sendMessage(chatIdToSend, artifactMessage, {
-      parse_mode: 'Markdown',
-    });
-  }
+  return `┌─────────────────────────────────────────────────┐
+│ Refactor ${repo.name} to its core
+│                                                 
+│ Goal: Focus on ${analysis.core_value || 'the core functionality'}
+│                                                 
+│ Delete:                                         
+${analysis.cut.slice(0, 10).map(f => `│ - ${f}`).join('\n')}
+${analysis.cut.length > 10 ? `│ ... and ${analysis.cut.length - 10} more` : ''}
+│                                                 
+│ Keep: ${keepList.substring(0, 40)}${keepList.length > 40 ? '...' : ''}
+│                                                 
+│ Remove all imports/references to deleted files.
+│                                                 
+│ Acceptance: App loads with only the core.
+│ No console errors. Deploy succeeds.
+└─────────────────────────────────────────────────┘`;
 }
 
 // ============ COMMANDS ============
 
 bot.command('start', async (ctx) => {
-  await ctx.reply(`Hey. I'm your project operator.
+  await ctx.reply(`👋 Ship or Kill Bot
 
-I watch your GitHub repos + Vercel deploys and help you **package and ship** to your audience.
+I help you blast through your repos and decide: ship it, cut to core, or kill it.
 
 **Commands:**
-/check - Analyze your most active project
-/status - Quick overview of all active projects
-/focus <project> - Lock in on one project
-/snooze [hours] - Pause notifications
-/done - Mark current project shipped
+/scan - Analyze repos from last 10 days
+/scan 30 - Analyze repos from last 30 days
+/status - See counts by state
+/repo <name> - Deep dive on one repo
 
-Just reply to any message and I'll generate what you need: Cursor prompts, launch posts, landing copy.`);
+Reply to any analysis message to continue that thread.`);
 });
 
-bot.command('check', async (ctx) => {
+bot.command('scan', async (ctx) => {
+  const userId = ctx.from?.id.toString();
+  if (userId !== chatId) return;
+
+  // Parse days from command
+  const text = ctx.message?.text || '';
+  const daysMatch = text.match(/\/scan\s+(\d+)/);
+  const days = daysMatch ? parseInt(daysMatch[1], 10) : 10;
+
+  await ctx.reply(`⏳ Scanning repos from last ${days} days...`);
+
   try {
-    await ctx.reply('Analyzing your projects...');
-    
-    // Check for manual focus first
-    const focusProject = await profileManager.getUserProfile().then(p => null); // TODO: add focus to user profile
-    const activeProject = await stateManager.getActiveProject();
-    
-    // Collect top projects
-    const snapshots = await collector.collectTopProjects(5);
-    
-    if (snapshots.length === 0) {
-      await ctx.reply('No active projects found in the last 7 days. Push some code first!');
+    const gh = getGitHub();
+    const repos = await gh.getRecentRepos(days);
+
+    if (repos.length === 0) {
+      await ctx.reply(`No repos found with activity in the last ${days} days.`);
       return;
     }
-    
-    // Find the best project to focus on (prioritize operational issues)
-    let targetSnapshot = snapshots[0];
-    
-    // Prefer projects with operational blockers
-    const withBlocker = snapshots.find(s => s.operationalBlocker?.severity === 'critical');
-    if (withBlocker) {
-      targetSnapshot = withBlocker;
+
+    await ctx.reply(`Found ${repos.length} repos. Analyzing...`);
+
+    const scanId = `scan_${Date.now()}`;
+    const results = {
+      total: repos.length,
+      analyzed: 0,
+      ready: 0,
+      cut_to_core: 0,
+      no_core: 0,
+      dead: 0,
+      shipped: 0,
+    };
+
+    // Process repos in parallel (batches of 5 to avoid rate limits)
+    const batchSize = 5;
+    for (let i = 0; i < repos.length; i += batchSize) {
+      const batch = repos.slice(i, i + batchSize);
+
+      await Promise.all(
+        batch.map(async (repo, batchIndex) => {
+          const seqNum = i + batchIndex + 1;
+          const [owner, name] = repo.full_name.split('/');
+
+          try {
+            // Check if already tracked
+            let tracked = await stateManager.getTrackedRepo(owner, name);
+
+            // Check if this is rev-agg (shipped)
+            const isShipped = name === 'rev-agg';
+
+            if (!tracked) {
+              // Create new tracked repo
+              tracked = {
+                id: `${owner}/${name}`,
+                name,
+                owner,
+                state: isShipped ? 'shipped' : 'analyzing',
+                analysis: null,
+                analyzed_at: null,
+                pending_action: null,
+                pending_since: null,
+                last_message_id: null,
+                last_push_at: repo.pushed_at,
+                killed_at: null,
+                shipped_at: isShipped ? new Date().toISOString() : null,
+              };
+            }
+
+            // Skip analysis for shipped repos
+            if (isShipped) {
+              tracked.state = 'shipped';
+              await stateManager.saveTrackedRepo(tracked);
+              results.shipped++;
+              results.analyzed++;
+
+              const msg = await ctx.reply(
+                `[${seqNum}/${repos.length}] ━━━ ${name} ━━━\n🚀 Already shipped!\n\nThis is your launched project.`,
+                { reply_markup: new InlineKeyboard().text('📊 View stats', `stats:${owner}:${name}`) }
+              );
+              await stateManager.setMessageRepo(msg.message_id, owner, name);
+              return;
+            }
+
+            // Analyze the repo
+            const analyzerInstance = getAnalyzer();
+            const analysis = await analyzerInstance.analyzeRepo(owner, name);
+
+            // Update tracked repo
+            tracked.analysis = analysis;
+            tracked.analyzed_at = new Date().toISOString();
+            tracked.state = verdictToState(analysis.verdict);
+
+            await stateManager.saveTrackedRepo(tracked);
+
+            // Update results
+            results.analyzed++;
+            if (analysis.verdict === 'ship') results.ready++;
+            else if (analysis.verdict === 'cut_to_core') results.cut_to_core++;
+            else if (analysis.verdict === 'no_core') results.no_core++;
+            else if (analysis.verdict === 'dead') results.dead++;
+
+            // Send result message
+            const message = formatAnalysisMessage(tracked, seqNum, repos.length);
+            const keyboard = createAnalysisKeyboard(tracked);
+
+            const msg = await ctx.reply(message, {
+              parse_mode: 'Markdown',
+              reply_markup: keyboard,
+            });
+
+            // Store message -> repo mapping for reply-to
+            await stateManager.setMessageRepo(msg.message_id, owner, name);
+            await stateManager.updateRepoMessageId(owner, name, msg.message_id);
+          } catch (error) {
+            console.error(`Failed to analyze ${repo.full_name}:`, error);
+            results.analyzed++;
+
+            await ctx.reply(
+              `[${seqNum}/${repos.length}] ━━━ ${name} ━━━\n❌ Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+            );
+          }
+        })
+      );
+
+      // Small delay between batches
+      if (i + batchSize < repos.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
-    
-    // Or prefer focused/active project
-    if (activeProject) {
-      const focused = snapshots.find(s => s.name === activeProject);
-      if (focused) targetSnapshot = focused;
-    }
-    
-    // Check if snoozed
-    const isSnoozed = await stateManager.isProjectSnoozed(targetSnapshot.name);
-    if (isSnoozed) {
-      const alternative = snapshots.find(s => s.name !== targetSnapshot.name);
-      if (alternative) targetSnapshot = alternative;
-    }
-    
-    // Analyze
-    const userProfile = await profileManager.getUserProfile();
-    const assessment = await reasoner.analyze(targetSnapshot, userProfile);
-    
-    // Save state
-    await stateManager.setActiveProject(targetSnapshot.name);
-    await stateManager.saveSnapshot(targetSnapshot.name, targetSnapshot);
-    await profileManager.setProjectProfile(targetSnapshot.name, {
-      gtmStage: targetSnapshot.gtmStage,
-      lastUpdatedBy: 'collector',
-    });
-    
-    // Set pending verification if there's an action
-    if (assessment.nextAction.artifact !== 'none') {
-      await profileManager.setPendingVerification({
-        projectName: targetSnapshot.name,
-        recommendedAction: assessment.nextAction.action,
-        recommendedAt: new Date().toISOString(),
-        expectedOutcome: targetSnapshot.operationalBlocker ? 'error_fixed' : 'gtm_ready',
-        previousNotificationKey: targetSnapshot.notificationKey,
-      });
-    }
-    
-    // Send snapshot with screenshot
-    await sendSnapshot(ctx.chat!.id.toString(), targetSnapshot, assessment);
-    
-    // Record conversation
-    await stateManager.addConversationMessage({
-      role: 'assistant',
-      content: formatMainMessage(targetSnapshot, assessment),
-      timestamp: new Date().toISOString(),
-      metadata: {
-        projectName: targetSnapshot.name,
-        askedAbout: assessment.nextAction.artifact,
-      },
-    });
+
+    // Save scan results
+    await stateManager.saveScanResult(scanId, results);
+
+    // Send summary
+    await ctx.reply(
+      `✅ **Scan complete**
+
+${results.ready} ready to ship
+${results.cut_to_core} need focus (cut to core)
+${results.no_core} unclear (no core found)
+${results.dead} dead
+${results.shipped} already shipped
+
+Total: ${results.analyzed}/${results.total} analyzed`
+    );
   } catch (error) {
-    console.error('Check error:', error);
-    await ctx.reply('Analysis failed. Try again in a moment.');
+    console.error('Scan error:', error);
+    await ctx.reply(`❌ Scan failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 });
 
 bot.command('status', async (ctx) => {
+  const userId = ctx.from?.id.toString();
+  if (userId !== chatId) return;
+
   try {
-    await ctx.reply('Checking all projects...');
-    
-    const snapshots = await collector.collectTopProjects(10);
-    
-    if (snapshots.length === 0) {
-      await ctx.reply('No active projects found in the last 7 days.');
-      return;
-    }
-    
-    let status = '**Your active projects:**\n\n';
-    
-    for (const snapshot of snapshots.slice(0, 5)) {
-      const stage = formatGTMStage(snapshot.gtmStage);
-      const icon = snapshot.operationalBlocker?.severity === 'critical' ? '🔴' :
-                   snapshot.gtmStage === 'ready_to_launch' ? '🟢' :
-                   snapshot.gtmStage === 'packaging' ? '🟡' : '⚪';
-      
-      status += `${icon} **${snapshot.name}** ${stage}\n`;
-      
-      if (snapshot.operationalBlocker) {
-        status += `   ${snapshot.operationalBlocker.issue}\n`;
-      } else if (snapshot.gtmBlocker) {
-        status += `   ${snapshot.gtmBlocker.issue}\n`;
-      }
-      
-      if (snapshot.deployment.url) {
-        status += `   🔗 ${snapshot.deployment.url}\n`;
-      }
-      status += '\n';
-    }
-    
-    status += `\nUse /check to dive into the most urgent one.`;
-    
-    await ctx.reply(status, { parse_mode: 'Markdown' });
+    const counts = await stateManager.getRepoCounts();
+
+    await ctx.reply(
+      `📊 **Repo Status**
+
+🟢 Ready to ship: ${counts.ready}
+🟡 Has core (needs work): ${counts.has_core}
+🔴 No core found: ${counts.no_core}
+☠️ Dead: ${counts.dead}
+🚀 Shipped: ${counts.shipped}
+⏳ Analyzing: ${counts.analyzing}
+
+Total tracked: ${counts.total}`
+    );
   } catch (error) {
     console.error('Status error:', error);
-    await ctx.reply('Failed to check status. Try again.');
+    await ctx.reply('❌ Failed to get status.');
   }
 });
 
-bot.command('focus', async (ctx) => {
-  const text = ctx.message?.text || ctx.msg?.text || '';
-  const projectName = text.split(' ').slice(1)[0];
-  
-  if (!projectName) {
-    await ctx.reply('Usage: /focus <project-name>');
+bot.command('repo', async (ctx) => {
+  const userId = ctx.from?.id.toString();
+  if (userId !== chatId) return;
+
+  const text = ctx.message?.text || '';
+  const repoName = text.replace('/repo', '').trim();
+
+  if (!repoName) {
+    await ctx.reply('Usage: /repo <name>');
     return;
   }
-  
-  await stateManager.setActiveProject(projectName);
-  
-  // Clear any snooze
-  const focus = await stateManager.getFocusState(projectName);
-  if (focus?.snoozedUntil) {
-    await stateManager.setFocusState(projectName, { snoozedUntil: null });
-  }
-  
-  await ctx.reply(`🎯 Locked in on **${projectName}**. Running /check now...`, { parse_mode: 'Markdown' });
-  
-  // Trigger a check
+
+  await ctx.reply(`⏳ Analyzing ${repoName}...`);
+
   try {
-    const snapshots = await collector.collectTopProjects(10);
-    const snapshot = snapshots.find(s => s.name === projectName);
-    
-    if (snapshot) {
-      const userProfile = await profileManager.getUserProfile();
-      const assessment = await reasoner.analyze(snapshot, userProfile);
-      await sendSnapshot(ctx.chat!.id.toString(), snapshot, assessment);
-    } else {
-      await ctx.reply(`Couldn't find ${projectName} in your recent repos.`);
+    const gh = getGitHub();
+    const allRepos = await gh.getUserRepos();
+    const repo = allRepos.find(r => r.name.toLowerCase() === repoName.toLowerCase());
+
+    if (!repo) {
+      await ctx.reply(`❌ Repo "${repoName}" not found.`);
+      return;
     }
+
+    const [owner, name] = repo.full_name.split('/');
+    const analyzerInstance = getAnalyzer();
+    const analysis = await analyzerInstance.analyzeRepo(owner, name);
+
+    // Create/update tracked repo
+    const tracked: TrackedRepo = {
+      id: `${owner}/${name}`,
+      name,
+      owner,
+      state: verdictToState(analysis.verdict),
+      analysis,
+      analyzed_at: new Date().toISOString(),
+      pending_action: null,
+      pending_since: null,
+      last_message_id: null,
+      last_push_at: repo.pushed_at,
+      killed_at: null,
+      shipped_at: null,
+    };
+
+    await stateManager.saveTrackedRepo(tracked);
+
+    // Send result
+    const message = formatAnalysisMessage(tracked);
+    const keyboard = createAnalysisKeyboard(tracked);
+
+    const msg = await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard,
+    });
+
+    await stateManager.setMessageRepo(msg.message_id, owner, name);
+    await stateManager.updateRepoMessageId(owner, name, msg.message_id);
   } catch (error) {
-    console.error('Focus check error:', error);
+    console.error('Repo analysis error:', error);
+    await ctx.reply(`❌ Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 });
 
-bot.command('snooze', async (ctx) => {
-  const text = ctx.message?.text || ctx.msg?.text || '';
-  const hours = parseInt(text.split(' ').slice(1)[0]) || 24;
-  
-  const activeProject = await stateManager.getActiveProject();
-  
-  if (activeProject) {
-    await stateManager.snoozeProject(activeProject, hours);
-    await ctx.reply(`😴 Snoozing **${activeProject}** for ${hours}h. I'll check back then.`, { parse_mode: 'Markdown' });
-  } else {
-    await ctx.reply(`No active project. Use /check first.`);
-  }
-});
-
-bot.command('done', async (ctx) => {
-  const activeProject = await stateManager.getActiveProject();
-  
-  if (activeProject) {
-    await stateManager.markProjectDone(activeProject);
-    await stateManager.setProjectState(activeProject, {
-      status: 'launched',
-      launchedAt: new Date().toISOString(),
-    });
-    await profileManager.clearPendingVerification(activeProject);
-    await profileManager.setProjectProfile(activeProject, {
-      gtmStage: 'post_launch',
-      lastUpdatedBy: 'user',
-    });
-    
-    await ctx.reply(`🚀 **${activeProject}** marked as shipped! Nice work.\n\nHow did it go? Any feedback or metrics to share?`, { parse_mode: 'Markdown' });
-    await stateManager.setActiveProject('');
-  } else {
-    await ctx.reply('No active project. Use /check first.');
-  }
-});
-
-// ============ CALLBACK QUERIES (Button handlers) ============
+// ============ BUTTON HANDLERS ============
 
 bot.on('callback_query:data', async (ctx) => {
   const data = ctx.callbackQuery.data;
-  const [action, projectName] = data.split(':');
-  
+  const [action, owner, name] = data.split(':');
+
   await ctx.answerCallbackQuery();
-  
-  // Get cached snapshot
-  const snapshot = await stateManager.getSnapshot(projectName);
-  if (!snapshot) {
-    await ctx.reply(`Project ${projectName} not found. Run /check first.`);
+
+  const repo = await stateManager.getTrackedRepo(owner, name);
+  if (!repo) {
+    await ctx.reply(`Repo ${owner}/${name} not found.`);
     return;
   }
-  
+
   switch (action) {
-    case 'prompt':
-    case 'post':
-    case 'copy':
-    case 'env': {
-      // Generate and send the artifact
-      const userProfile = await profileManager.getUserProfile();
-      const assessment = await reasoner.analyze(snapshot, userProfile);
-      await sendArtifact(ctx.chat!.id.toString(), assessment);
+    case 'kill': {
+      await stateManager.updateRepoState(owner, name, 'dead');
+      await ctx.reply(`☠️ **${name}** killed. Off your plate.`);
       break;
     }
-    
-    case 'followup': {
-      // Generate follow-up post for post-launch updates
-      const userProfile = await profileManager.getUserProfile();
-      const assessment = await reasoner.analyze(snapshot, userProfile);
-      
-      // Generate a follow-up post
-      if (assessment.artifacts.launchPost) {
-        await ctx.reply(`**Follow-up Post:**\n\n${assessment.artifacts.launchPost}`, { parse_mode: 'Markdown' });
+
+    case 'ship': {
+      if (repo.analysis?.tweet_draft) {
+        await ctx.reply(
+          `🚀 **${name}** ready to ship!\n\n**Tweet:**\n\`\`\`\n${repo.analysis.tweet_draft}\n\`\`\`\n\nCopy and post. Reply "shipped" when done.`
+        );
       } else {
-        // Fallback: generate generic follow-up
-        const followUp = `Update on ${snapshot.name}:\n\nWe've been listening to your feedback and making improvements.\n\n${snapshot.deployment.url ? `Check it out: ${snapshot.deployment.url}` : ''}`;
-        await ctx.reply(`**Follow-up Post:**\n\n${followUp}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`🚀 **${name}** marked ready. Generate a tweet with /repo ${name}`);
+      }
+      await stateManager.updateRepoState(owner, name, 'ready');
+      break;
+    }
+
+    case 'cut': {
+      const prompt = formatCursorPrompt(repo);
+      await ctx.reply(
+        `✂️ **Cut to core for ${name}**\n\nPaste this into Cursor:\n\n\`\`\`\n${prompt}\n\`\`\`\n\nReply "done" when you've pushed the changes.`
+      );
+      await stateManager.setPendingAction(owner, name, 'cut_to_core');
+      break;
+    }
+
+    case 'skip': {
+      await ctx.reply(`⏸️ **${name}** skipped for now.`);
+      break;
+    }
+
+    case 'deeper': {
+      await ctx.reply(`⏳ Re-analyzing ${name} in depth...`);
+      try {
+        const analyzerInstance = getAnalyzer();
+        const analysis = await analyzerInstance.analyzeRepo(owner, name);
+        repo.analysis = analysis;
+        repo.state = verdictToState(analysis.verdict);
+        repo.analyzed_at = new Date().toISOString();
+        await stateManager.saveTrackedRepo(repo);
+
+        const message = formatAnalysisMessage(repo);
+        const keyboard = createAnalysisKeyboard(repo);
+        const msg = await ctx.reply(message, {
+          parse_mode: 'Markdown',
+          reply_markup: keyboard,
+        });
+        await stateManager.setMessageRepo(msg.message_id, owner, name);
+      } catch (error) {
+        await ctx.reply(`❌ Re-analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
       break;
     }
-    
-    case 'snooze': {
-      await stateManager.snoozeProject(projectName, 24);
-      await ctx.reply(`😴 Snoozing **${projectName}** for 24h.`, { parse_mode: 'Markdown' });
+
+    case 'revive': {
+      await ctx.reply(`⏳ Reviving ${name}...`);
+      try {
+        const analyzerInstance = getAnalyzer();
+        const analysis = await analyzerInstance.analyzeRepo(owner, name);
+        repo.analysis = analysis;
+        repo.state = verdictToState(analysis.verdict);
+        repo.analyzed_at = new Date().toISOString();
+        repo.killed_at = null;
+        await stateManager.saveTrackedRepo(repo);
+
+        const message = formatAnalysisMessage(repo);
+        const keyboard = createAnalysisKeyboard(repo);
+        const msg = await ctx.reply(message, {
+          parse_mode: 'Markdown',
+          reply_markup: keyboard,
+        });
+        await stateManager.setMessageRepo(msg.message_id, owner, name);
+      } catch (error) {
+        await ctx.reply(`❌ Revival failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
       break;
     }
-    
-    case 'done': {
-      await stateManager.markProjectDone(projectName);
-      await stateManager.setProjectState(projectName, {
-        status: 'launched',
-        launchedAt: new Date().toISOString(),
-      });
-      await profileManager.clearPendingVerification(projectName);
-      await ctx.reply(`✅ **${projectName}** marked done!`, { parse_mode: 'Markdown' });
+
+    case 'edit': {
+      await ctx.reply(`✏️ What tone do you want for the tweet? (casual, professional, technical, hype)`);
+      // TODO: Implement tweet editing flow
+      break;
+    }
+
+    case 'retry': {
+      await ctx.reply(`⏳ Retrying analysis for ${name}...`);
+      try {
+        const analyzerInstance = getAnalyzer();
+        const analysis = await analyzerInstance.analyzeRepo(owner, name);
+        repo.analysis = analysis;
+        repo.state = verdictToState(analysis.verdict);
+        repo.analyzed_at = new Date().toISOString();
+        await stateManager.saveTrackedRepo(repo);
+
+        const message = formatAnalysisMessage(repo);
+        const keyboard = createAnalysisKeyboard(repo);
+        const msg = await ctx.reply(message, {
+          parse_mode: 'Markdown',
+          reply_markup: keyboard,
+        });
+        await stateManager.setMessageRepo(msg.message_id, owner, name);
+      } catch (error) {
+        await ctx.reply(`❌ Retry failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
       break;
     }
   }
 });
 
-// ============ POST-LAUNCH FEEDBACK PARSING ============
-
-interface PostLaunchFeedback {
-  hasFeedback: boolean;
-  tractionSignal: string | null;   // "50 likes"
-  featureRequest: string | null;   // "dark mode"
-  rawExcerpt: string;
-}
-
-function parsePostLaunchFeedback(message: string): PostLaunchFeedback {
-  // Traction: "got X likes/stars/users"
-  const tractionMatch = message.match(/(\d+)\s*(likes?|stars?|users?|signups?|downloads?|views?|replies?)/i);
-  
-  // Feature requests: "asking for X", "want X", "need X", "requesting X"
-  const requestPatterns = [
-    /(?:people\s+(?:are\s+)?)?asking\s+(?:for\s+)?["']?([^"'.]+)["']?/i,
-    /(?:they\s+)?(?:want|need|requesting)\s+["']?([^"'.]+)["']?/i,
-  ];
-  
-  let featureRequest: string | null = null;
-  for (const pattern of requestPatterns) {
-    const match = message.match(pattern);
-    if (match) {
-      featureRequest = match[1].trim();
-      break;
-    }
-  }
-  
-  return {
-    hasFeedback: !!(tractionMatch || featureRequest),
-    tractionSignal: tractionMatch ? `${tractionMatch[1]} ${tractionMatch[2]}` : null,
-    featureRequest,
-    rawExcerpt: message.substring(0, 200),
-  };
-}
-
-async function sendPostLaunchResponse(
-  chatIdToSend: string,
-  snapshot: ProjectSnapshot,
-  assessment: ProjectAssessment,
-  feedback: PostLaunchFeedback
-): Promise<void> {
-  let msg = `**${snapshot.name}** 📊 Post-Launch\n\n`;
-  
-  // Acknowledge traction
-  if (feedback.tractionSignal) {
-    msg += `${feedback.tractionSignal} is solid signal.\n\n`;
-  }
-  
-  // Acknowledge feature request
-  if (feedback.featureRequest) {
-    // Escape markdown special chars in user input
-    const safeFeature = feedback.featureRequest.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
-    msg += `Users want: ${safeFeature}\n\n`;
-  }
-  
-  // Add cursor prompt if generated
-  if (assessment.artifacts.cursorPrompt) {
-    msg += `**Cursor Prompt:**\n\n${assessment.artifacts.cursorPrompt}\n\n`;
-  }
-  
-  msg += `Want me to draft a follow-up post about this update?`;
-  
-  const keyboard = new InlineKeyboard()
-    .text('📣 Draft Follow-up', `followup:${snapshot.name}`)
-    .row()
-    .text('😴 Snooze 24h', `snooze:${snapshot.name}`)
-    .text('✅ Done', `done:${snapshot.name}`);
-  
-  await bot.api.sendMessage(chatIdToSend, msg, {
-    parse_mode: 'Markdown',
-    reply_markup: keyboard,
-  });
-}
-
-// ============ MESSAGE HANDLER ============
+// ============ TEXT MESSAGE HANDLER (for reply-to and natural language) ============
 
 bot.on('message:text', async (ctx) => {
   const userMessage = ctx.message.text;
@@ -548,177 +563,110 @@ bot.on('message:text', async (ctx) => {
   if (userId !== chatId) return;
   if (userMessage.startsWith('/')) return;
 
-  // Record message
-  await stateManager.addConversationMessage({
-    role: 'user',
-    content: userMessage,
-    timestamp: new Date().toISOString(),
-  });
+  // Check if this is a reply to a previous message
+  const replyTo = ctx.message.reply_to_message;
+  let targetRepo: TrackedRepo | null = null;
 
-  // Get active project
-  const activeProject = await stateManager.getActiveProject();
-  
-  if (!activeProject) {
-    await ctx.reply("No active project. Use /check to analyze your repos first.");
+  if (replyTo) {
+    // Get repo from reply-to message
+    const repoRef = await stateManager.getMessageRepo(replyTo.message_id);
+    if (repoRef) {
+      targetRepo = await stateManager.getTrackedRepo(repoRef.owner, repoRef.name);
+    }
+  }
+
+  // Natural language triggers
+  const lower = userMessage.toLowerCase().trim();
+
+  // "done" / "pushed" / "fixed" - check pending action
+  if (['done', 'pushed', 'fixed', 'finished'].some(w => lower.includes(w))) {
+    if (targetRepo && targetRepo.pending_action) {
+      await ctx.reply(`⏳ Checking ${targetRepo.name}...`);
+
+      try {
+        const analyzerInstance = getAnalyzer();
+        const analysis = await analyzerInstance.analyzeRepo(targetRepo.owner, targetRepo.name);
+        targetRepo.analysis = analysis;
+        targetRepo.state = verdictToState(analysis.verdict);
+        targetRepo.analyzed_at = new Date().toISOString();
+        targetRepo.pending_action = null;
+        targetRepo.pending_since = null;
+        await stateManager.saveTrackedRepo(targetRepo);
+
+        const message = formatAnalysisMessage(targetRepo);
+        const keyboard = createAnalysisKeyboard(targetRepo);
+        const msg = await ctx.reply(message, {
+          parse_mode: 'Markdown',
+          reply_markup: keyboard,
+        });
+        await stateManager.setMessageRepo(msg.message_id, targetRepo.owner, targetRepo.name);
+      } catch (error) {
+        await ctx.reply(`❌ Check failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+      return;
+    } else {
+      await ctx.reply(`What repo are you done with? Reply to the analysis message or use /repo <name>`);
+      return;
+    }
+  }
+
+  // "kill" / "dead" - mark as dead
+  if (['kill', 'kill it', 'dead', 'delete'].some(w => lower === w || lower.startsWith(w + ' '))) {
+    if (targetRepo) {
+      await stateManager.updateRepoState(targetRepo.owner, targetRepo.name, 'dead');
+      await ctx.reply(`☠️ **${targetRepo.name}** killed. Off your plate.`);
+      return;
+    }
+  }
+
+  // "ship" / "shipped" / "posted" - mark as shipped
+  if (['ship', 'shipped', 'posted', 'launched'].some(w => lower === w || lower.startsWith(w + ' '))) {
+    if (targetRepo) {
+      await stateManager.updateRepoState(targetRepo.owner, targetRepo.name, 'shipped');
+      await ctx.reply(`🚀 **${targetRepo.name}** shipped! Nice work.\n\nHow'd it go? Any feedback?`);
+      return;
+    }
+  }
+
+  // Post-launch feedback pattern: "got X likes" or "people want Y"
+  const tractionMatch = userMessage.match(/(\d+)\s*(likes?|stars?|users?|signups?)/i);
+  const featureMatch = userMessage.match(/(?:people|they|users?)\s+(?:want|asking for|need)\s+(.+)/i);
+
+  if (targetRepo && (tractionMatch || featureMatch)) {
+    let response = `📊 **${targetRepo.name}** feedback noted.\n\n`;
+
+    if (tractionMatch) {
+      response += `**Traction:** ${tractionMatch[1]} ${tractionMatch[2]} - solid signal!\n`;
+    }
+
+    if (featureMatch) {
+      const feature = featureMatch[1].trim();
+      response += `**Feature request:** ${feature}\n\nWant a Cursor prompt to add this?`;
+    }
+
+    await ctx.reply(response);
     return;
   }
 
-  // Get cached snapshot
-  const snapshot = await stateManager.getSnapshot(activeProject);
-  if (!snapshot) {
-    await ctx.reply("Project context expired. Running /check...");
-    // Trigger check
-    return;
-  }
-
-  // Get project state to check if launched
-  const projectState = await stateManager.getProjectState(activeProject);
-  const isLaunched = projectState?.status === 'launched' || !!projectState?.launchedAt;
-
-  // Parse feedback only if project is launched
-  if (isLaunched) {
-    const feedback = parsePostLaunchFeedback(userMessage);
-    
-    if (feedback.hasFeedback) {
-      // Create user_reply evidence
-      const userReplyEvidence: EvidenceRef = {
-        kind: 'user_reply',
-        excerpt: feedback.rawExcerpt,
-        tractionSignal: feedback.tractionSignal || undefined,
-        featureRequest: feedback.featureRequest || undefined,
-      };
-      
-      // Route through reasoner with feedback context
-      const assessment = await reasoner.analyzeWithFeedback(
-        snapshot,
-        await profileManager.getUserProfile(),
-        feedback
-      );
-      
-      // Ensure evidence is attached
-      if (assessment.primaryShortcoming) {
-        assessment.primaryShortcoming.evidence.push(userReplyEvidence);
-      } else {
-        // Create a shortcoming if none exists, just to hold the evidence
-        assessment.primaryShortcoming = {
-          issue: 'User feedback received',
-          severity: 'minor',
-          evidence: [userReplyEvidence],
-          impact: 'User is providing post-launch feedback',
-        };
-      }
-      
-      // Send through standard pipeline
-      await sendPostLaunchResponse(ctx.chat!.id.toString(), snapshot, assessment, feedback);
-      
-      await stateManager.addConversationMessage({
-        role: 'assistant',
-        content: 'Post-launch feedback processed',
-        timestamp: new Date().toISOString(),
-      });
-      return;
-    }
-  }
-
-  // Get conversation history for context
-  const conversationHistory = await stateManager.getRecentConversation(10);
-  const historyForReasoner: ConversationMessage[] = conversationHistory.map(m => ({
-    role: m.role,
-    content: m.content,
-  }));
-
-  // Collect all project snapshots for context
-  const allSnapshots = await collector.collectTopProjects(10);
-  
-  // Use AI to understand the message intent
-  const understanding = await reasoner.understandMessage(
-    userMessage,
-    historyForReasoner,
-    allSnapshots,
-    activeProject
-  );
-
-  const userProfile = await profileManager.getUserProfile();
-
-  // Handle based on intent
-  switch (understanding.intent) {
-    case 'question': {
-      // Direct response to questions
-      if (understanding.directResponse) {
-        await ctx.reply(understanding.directResponse, { parse_mode: 'Markdown' });
-        await stateManager.addConversationMessage({
-          role: 'assistant',
-          content: understanding.directResponse,
-          timestamp: new Date().toISOString(),
-        });
-      }
-      return;
-    }
-
-    case 'artifact_request':
-    case 'confirmation': {
-      // Generate the requested artifact
-      const assessment = await reasoner.analyze(snapshot, userProfile);
-      let response: string | null = null;
-
-      switch (understanding.artifactType) {
-        case 'cursor_prompt':
-          response = assessment.artifacts.cursorPrompt 
-            ? `**Cursor Prompt:**\n\n${assessment.artifacts.cursorPrompt}`
-            : null;
-          break;
-        case 'launch_post':
-          response = assessment.artifacts.launchPost
-            ? `**Launch Post:**\n\n${assessment.artifacts.launchPost}`
-            : null;
-          break;
-        case 'landing_copy':
-          response = assessment.artifacts.landingCopy
-            ? `**Landing Copy:**\n\n${assessment.artifacts.landingCopy}`
-            : null;
-          break;
-        case 'env_checklist':
-          response = assessment.artifacts.envChecklist;
-          break;
-      }
-
-      if (response) {
-        await ctx.reply(response, { parse_mode: 'Markdown' });
-        await stateManager.addConversationMessage({
-          role: 'assistant',
-          content: response,
-          timestamp: new Date().toISOString(),
-        });
-      } else {
-        // Fallback: send whatever artifact is available
-        const artifactMessage = formatArtifactMessage(assessment);
-        if (artifactMessage) {
-          await ctx.reply(artifactMessage, { parse_mode: 'Markdown' });
-          await stateManager.addConversationMessage({
-            role: 'assistant',
-            content: artifactMessage,
-            timestamp: new Date().toISOString(),
-          });
-        }
-      }
-      return;
-    }
-
-    case 'unclear':
-    default: {
-      // Provide helpful guidance
-      const response = understanding.directResponse || 
-        `What would you like to do with **${activeProject}**?\n\n• "prompt" → Cursor prompt\n• "post" → Launch post\n• "copy" → Landing copy\n• /status → See all projects`;
-      await ctx.reply(response, { parse_mode: 'Markdown' });
-      await stateManager.addConversationMessage({
-        role: 'assistant',
-        content: response,
-        timestamp: new Date().toISOString(),
-      });
-      return;
-    }
+  // Default: help message
+  if (!targetRepo) {
+    await ctx.reply(
+      `Not sure which repo you're talking about.\n\nReply to an analysis message, or use:\n- /scan - Analyze recent repos\n- /status - See repo counts\n- /repo <name> - Analyze specific repo`
+    );
   }
 });
+
+// ============ HELPER FUNCTIONS ============
+
+function verdictToState(verdict: string): RepoState {
+  switch (verdict) {
+    case 'ship': return 'ready';
+    case 'cut_to_core': return 'has_core';
+    case 'no_core': return 'no_core';
+    case 'dead': return 'dead';
+    default: return 'no_core';
+  }
+}
 
 // ============ WEBHOOK HANDLER ============
 
@@ -729,7 +677,7 @@ export default async function handler(req: Request) {
 
   try {
     const update = await req.json() as Update;
-    
+
     const debugInfo = {
       updateType: update.message ? 'message' : update.callback_query ? 'callback' : 'other',
       fromId: update.message?.from?.id || update.callback_query?.from?.id,
@@ -737,9 +685,9 @@ export default async function handler(req: Request) {
       text: update.message?.text?.substring(0, 50) || update.callback_query?.data,
     };
     console.log('Telegram update:', JSON.stringify(debugInfo));
-    
+
     await bot.handleUpdate(update);
-    
+
     return new Response(JSON.stringify({ success: true }), {
       headers: { 'Content-Type': 'application/json' },
     });
