@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vercel dev",
     "optimize-readmes": "npx tsx scripts/optimize-readmes.ts",
-    "regenerate-images": "npx tsx scripts/regenerate-images.ts"
+    "regenerate-images": "npx tsx scripts/regenerate-images.ts",
+    "deploy-github": "npx tsx scripts/deploy-to-github.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
