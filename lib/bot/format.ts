@@ -217,8 +217,9 @@ export function formatRepoCard(card: RepoCard): string {
     lines.push(`[​](${card.cover_image_url})`);
   }
   
-  // Header: Name + Stage
-  lines.push(`**${card.repo}** ${stageLabel(card.stage)}`);
+  // Header: Name + Stage + Live Link
+  const vercelUrl = `https://${card.repo}.vercel.app`;
+  lines.push(`**${card.repo}** ${stageLabel(card.stage)} • [live](${vercelUrl})`);
   lines.push('');
   
   // Potential (aspirational one-liner)

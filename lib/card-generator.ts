@@ -248,8 +248,12 @@ export async function generateCard(
   const priority = calculatePriority(repo, memory);
   
   // 6. Build card
-  // Use actual cover URL if exists, otherwise fallback to GitHub's auto-generated OG image
-  const coverUrl = repo.cover_image_url || `https://opengraph.githubassets.com/1/${fullName}`;
+  // Cover image priority:
+  // 1. Explicitly set cover_image_url (from state)
+  // 2. Generated social preview in .github/social-preview.png
+  // 3. GitHub's auto-generated OG image as final fallback
+  const coverUrl = repo.cover_image_url 
+    || `https://raw.githubusercontent.com/${fullName}/main/.github/social-preview.png`;
   
   return {
     repo: repo.name,
