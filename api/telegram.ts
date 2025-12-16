@@ -8,6 +8,7 @@ import { Collector, ProjectSnapshot } from '../lib/collector.js';
 import { Reasoner, ProjectAssessment } from '../lib/reasoner.js';
 import { profileManager } from '../lib/profile.js';
 import { stateManager } from '../lib/state.js';
+import { EvidenceRef } from '../lib/types.js';
 
 // ============ BOT SETUP ============
 
@@ -56,7 +57,7 @@ function formatMainMessage(snapshot: ProjectSnapshot, assessment: ProjectAssessm
     const evidence = assessment.primaryShortcoming.evidence[0];
     if (evidence) {
       if (evidence.kind === 'vercel_log') {
-        msg += `\`${evidence.excerpt.substring(0, 100)}\`\n`;
+        msg += `\`\`\`\n${evidence.excerpt.substring(0, 200)}\n\`\`\`\n`;
       } else if (evidence.kind === 'env_diff') {
         msg += `Missing: \`${evidence.missing.slice(0, 3).join('`, `')}\`\n`;
       }
@@ -384,6 +385,10 @@ bot.command('done', async (ctx) => {
   
   if (activeProject) {
     await stateManager.markProjectDone(activeProject);
+    await stateManager.setProjectState(activeProject, {
+      status: 'launched',
+      launchedAt: new Date().toISOString(),
+    });
     await profileManager.clearPendingVerification(activeProject);
     await profileManager.setProjectProfile(activeProject, {
       gtmStage: 'post_launch',
@@ -424,6 +429,22 @@ bot.on('callback_query:data', async (ctx) => {
       break;
     }
     
+    case 'followup': {
+      // Generate follow-up post for post-launch updates
+      const userProfile = await profileManager.getUserProfile();
+      const assessment = await reasoner.analyze(snapshot, userProfile);
+      
+      // Generate a follow-up post
+      if (assessment.artifacts.launchPost) {
+        await ctx.reply(`**Follow-up Post:**\n\n${assessment.artifacts.launchPost}`, { parse_mode: 'Markdown' });
+      } else {
+        // Fallback: generate generic follow-up
+        const followUp = `Update on ${snapshot.name}:\n\nWe've been listening to your feedback and making improvements.\n\n${snapshot.deployment.url ? `Check it out: ${snapshot.deployment.url}` : ''}`;
+        await ctx.reply(`**Follow-up Post:**\n\n${followUp}`, { parse_mode: 'Markdown' });
+      }
+      break;
+    }
+    
     case 'snooze': {
       await stateManager.snoozeProject(projectName, 24);
       await ctx.reply(`😴 Snoozing **${projectName}** for 24h.`, { parse_mode: 'Markdown' });
@@ -432,12 +453,91 @@ bot.on('callback_query:data', async (ctx) => {
     
     case 'done': {
       await stateManager.markProjectDone(projectName);
+      await stateManager.setProjectState(projectName, {
+        status: 'launched',
+        launchedAt: new Date().toISOString(),
+      });
       await profileManager.clearPendingVerification(projectName);
       await ctx.reply(`✅ **${projectName}** marked done!`, { parse_mode: 'Markdown' });
       break;
     }
   }
 });
+
+// ============ POST-LAUNCH FEEDBACK PARSING ============
+
+interface PostLaunchFeedback {
+  hasFeedback: boolean;
+  tractionSignal: string | null;   // "50 likes"
+  featureRequest: string | null;   // "dark mode"
+  rawExcerpt: string;
+}
+
+function parsePostLaunchFeedback(message: string): PostLaunchFeedback {
+  // Traction: "got X likes/stars/users"
+  const tractionMatch = message.match(/(\d+)\s*(likes?|stars?|users?|signups?|downloads?|views?|replies?)/i);
+  
+  // Feature requests: "asking for X", "want X", "need X", "requesting X"
+  const requestPatterns = [
+    /(?:people\s+(?:are\s+)?)?asking\s+(?:for\s+)?["']?([^"'.]+)["']?/i,
+    /(?:they\s+)?(?:want|need|requesting)\s+["']?([^"'.]+)["']?/i,
+  ];
+  
+  let featureRequest: string | null = null;
+  for (const pattern of requestPatterns) {
+    const match = message.match(pattern);
+    if (match) {
+      featureRequest = match[1].trim();
+      break;
+    }
+  }
+  
+  return {
+    hasFeedback: !!(tractionMatch || featureRequest),
+    tractionSignal: tractionMatch ? `${tractionMatch[1]} ${tractionMatch[2]}` : null,
+    featureRequest,
+    rawExcerpt: message.substring(0, 200),
+  };
+}
+
+async function sendPostLaunchResponse(
+  chatIdToSend: string,
+  snapshot: ProjectSnapshot,
+  assessment: ProjectAssessment,
+  feedback: PostLaunchFeedback
+): Promise<void> {
+  let msg = `**${snapshot.name}** 📊 Post-Launch\n\n`;
+  
+  // Acknowledge traction
+  if (feedback.tractionSignal) {
+    msg += `${feedback.tractionSignal} is solid signal.\n\n`;
+  }
+  
+  // Acknowledge feature request
+  if (feedback.featureRequest) {
+    // Escape markdown special chars in user input
+    const safeFeature = feedback.featureRequest.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
+    msg += `Users want: ${safeFeature}\n\n`;
+  }
+  
+  // Add cursor prompt if generated
+  if (assessment.artifacts.cursorPrompt) {
+    msg += `**Cursor Prompt:**\n\n${assessment.artifacts.cursorPrompt}\n\n`;
+  }
+  
+  msg += `Want me to draft a follow-up post about this update?`;
+  
+  const keyboard = new InlineKeyboard()
+    .text('📣 Draft Follow-up', `followup:${snapshot.name}`)
+    .row()
+    .text('😴 Snooze 24h', `snooze:${snapshot.name}`)
+    .text('✅ Done', `done:${snapshot.name}`);
+  
+  await bot.api.sendMessage(chatIdToSend, msg, {
+    parse_mode: 'Markdown',
+    reply_markup: keyboard,
+  });
+}
 
 // ============ MESSAGE HANDLER ============
 
@@ -469,6 +569,55 @@ bot.on('message:text', async (ctx) => {
     await ctx.reply("Project context expired. Running /check...");
     // Trigger check
     return;
+  }
+
+  // Get project state to check if launched
+  const projectState = await stateManager.getProjectState(activeProject);
+  const isLaunched = projectState?.status === 'launched' || !!projectState?.launchedAt;
+
+  // Parse feedback only if project is launched
+  if (isLaunched) {
+    const feedback = parsePostLaunchFeedback(userMessage);
+    
+    if (feedback.hasFeedback) {
+      // Create user_reply evidence
+      const userReplyEvidence: EvidenceRef = {
+        kind: 'user_reply',
+        excerpt: feedback.rawExcerpt,
+        tractionSignal: feedback.tractionSignal || undefined,
+        featureRequest: feedback.featureRequest || undefined,
+      };
+      
+      // Route through reasoner with feedback context
+      const assessment = await reasoner.analyzeWithFeedback(
+        snapshot,
+        await profileManager.getUserProfile(),
+        feedback
+      );
+      
+      // Ensure evidence is attached
+      if (assessment.primaryShortcoming) {
+        assessment.primaryShortcoming.evidence.push(userReplyEvidence);
+      } else {
+        // Create a shortcoming if none exists, just to hold the evidence
+        assessment.primaryShortcoming = {
+          issue: 'User feedback received',
+          severity: 'minor',
+          evidence: [userReplyEvidence],
+          impact: 'User is providing post-launch feedback',
+        };
+      }
+      
+      // Send through standard pipeline
+      await sendPostLaunchResponse(ctx.chat!.id.toString(), snapshot, assessment, feedback);
+      
+      await stateManager.addConversationMessage({
+        role: 'assistant',
+        content: 'Post-launch feedback processed',
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
   }
 
   // Detect intent and generate appropriate artifact

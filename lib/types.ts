@@ -7,7 +7,8 @@ export type EvidenceRef =
   | { kind: 'env_diff'; missing: string[]; configured: string[]; source: string }
   | { kind: 'screenshot'; url: string; capturedAt: string }
   | { kind: 'http_check'; url: string; status: number; error?: string }
-  | { kind: 'diff'; sha: string; files: string[]; excerpt: string };
+  | { kind: 'diff'; sha: string; files: string[]; excerpt: string }
+  | { kind: 'user_reply'; excerpt: string; tractionSignal?: string; featureRequest?: string };
 
 // ============ GTM STAGES ============
 

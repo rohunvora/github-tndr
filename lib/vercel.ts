@@ -163,13 +163,47 @@ export class VercelClient {
   async getDeploymentLogs(deploymentId: string): Promise<string> {
     const events = await this.getDeploymentEvents(deploymentId);
     
-    // Filter for build and error events
-    const relevantEvents = events
-      .filter(e => e.payload?.text || e.type === 'error')
-      .map(e => e.payload?.text || `[${e.type}]`)
-      .slice(-50); // Last 50 log lines
+    // Find error-relevant lines first
+    const errorPatterns = /error:|cannot find|failed|module not found|type.?error|syntax.?error/i;
+    const errorLines: string[] = [];
+    const allLines: string[] = [];
     
-    return relevantEvents.join('\n');
+    for (const e of events) {
+      const text = e.payload?.text;
+      if (!text) continue;
+      
+      allLines.push(text);
+      if (errorPatterns.test(text)) {
+        // Include this line and next 3 for context (file:line usually follows)
+        const idx = allLines.length - 1;
+        errorLines.push(...allLines.slice(Math.max(0, idx - 1), idx + 4));
+      }
+    }
+    
+    // Return error context if found, otherwise last 20 lines
+    if (errorLines.length > 0) {
+      return [...new Set(errorLines)].slice(0, 10).join('\n');
+    }
+    
+    return allLines.slice(-20).join('\n');
+  }
+
+  async getDeploymentError(deploymentId: string): Promise<{
+    excerpt: string;
+    filePath: string | null;
+    line: number | null;
+  }> {
+    const logs = await this.getDeploymentLogs(deploymentId);
+    
+    // Try to extract file:line from common patterns
+    // e.g., "at demo-website/app/page.tsx:1:1" or "./app/page.tsx:15"
+    const fileLineMatch = logs.match(/(?:at\s+)?([^\s:]+\.[jt]sx?):(\d+)/);
+    
+    return {
+      excerpt: logs.substring(0, 300),
+      filePath: fileLineMatch?.[1] || null,
+      line: fileLineMatch?.[2] ? parseInt(fileLineMatch[2], 10) : null,
+    };
   }
 
   async getProjectEnvVars(projectId: string): Promise<VercelEnvVar[]> {

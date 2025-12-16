@@ -349,7 +349,8 @@ export class Collector {
       let errorCategory: 'auth' | 'config' | 'runtime' | 'build' | 'unknown' | null = null;
 
       if (deployment.state === 'ERROR') {
-        errorLog = await this.vercel.getDeploymentLogs(deployment.uid);
+        const errorInfo = await this.vercel.getDeploymentError(deployment.uid);
+        errorLog = errorInfo.excerpt;
         if (deployment.error?.message) {
           errorLog = `${deployment.error.message}\n\n${errorLog}`;
         }
@@ -512,9 +513,8 @@ export class Collector {
       evidence.push({ kind: 'http_check', url: context.deployUrl || 'unknown', status: 0, error: context.screenshot.error });
     }
 
-    // Has clear CTA (check README for action words)
-    const ctaPatterns = /try it|get started|sign up|install|demo|live|check it out/i;
-    const hasClearCTA = !!(context.readme && ctaPatterns.test(context.readme));
+    // Has clear CTA - require CTA context (sections, links, or buttons)
+    const hasClearCTA = this.hasClearCTA(context.readme);
 
     // Mobile usable - we'd need a mobile screenshot for this, assume true if desktop works
     const mobileUsable = urlLoads;
@@ -571,7 +571,8 @@ export class Collector {
     const gtmReady = gtmChecks.deployGreen && 
                      gtmChecks.urlLoads && 
                      gtmChecks.hasReadme && 
-                     gtmChecks.hasDemoAsset;
+                     gtmChecks.hasDemoAsset &&
+                     gtmChecks.hasClearCTA;  // CTA is required for launch readiness
     
     if (!gtmReady) {
       return 'packaging';
@@ -589,20 +590,18 @@ export class Collector {
     missingEnvVars: string[];
     envVarsConfigured: string[];
   }): Shortcoming | null {
-    // Deploy error
-    if (context.deployStatus === 'error' && context.errorLog) {
-      const errorExcerpt = context.errorLog.split('\n')
-        .find(l => l.toLowerCase().includes('error') || l.includes('failed'))
-        ?.substring(0, 150) || context.errorLog.substring(0, 150);
-
+    // Deploy error - Always create blocker for error deploys
+    if (context.deployStatus === 'error') {
+      const excerpt = context.errorLog || 'Build failed - check Vercel dashboard for details';
+      
       const evidence: EvidenceRef[] = [{
         kind: 'vercel_log',
         deploymentId: context.deploymentId || 'unknown',
-        excerpt: errorExcerpt,
+        excerpt: excerpt.substring(0, 300),
       }];
 
       return {
-        issue: `Deploy failing (${context.errorCategory || 'unknown'} error)`,
+        issue: `Deploy failing (${context.errorCategory || 'build'} error)`,
         severity: 'critical',
         evidence,
         impact: 'Nothing works until this is fixed',
@@ -681,6 +680,21 @@ export class Collector {
       evidence: [issues[0].evidence],
       impact: 'Not ready to share with your audience',
     };
+  }
+
+  private hasClearCTA(readme: string | null): boolean {
+    if (!readme) return false;
+    
+    // Must have a section header with CTA intent
+    const sectionPattern = /^#{1,3}\s*(getting started|installation|quick start|usage|try it|how to use)/im;
+    
+    // Or a markdown link with CTA text
+    const linkPattern = /\[.*?(try|install|get started|sign up|live demo|check it out).*?\]\s*\(/i;
+    
+    // Or an emphasized CTA
+    const emphasisPattern = /\*\*.*?(try|install|get started).*?\*\*/i;
+    
+    return sectionPattern.test(readme) || linkPattern.test(readme) || emphasisPattern.test(readme);
   }
 
   private detectProjectType(

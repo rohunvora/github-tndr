@@ -73,6 +73,84 @@ export class Reasoner {
     };
   }
 
+  async analyzeWithFeedback(
+    snapshot: ProjectSnapshot,
+    userProfile: UserProfile | undefined,
+    feedback: { tractionSignal: string | null; featureRequest: string | null }
+  ): Promise<ProjectAssessment> {
+    // Force stage to post_launch
+    const assessment = await this.analyze(snapshot, userProfile);
+    assessment.gtmStage = 'post_launch';
+    
+    // If there's a feature request, generate cursor prompt for it
+    if (feedback.featureRequest) {
+      assessment.nextAction = {
+        action: `Add ${feedback.featureRequest}`,
+        actionType: 'build',
+        rationale: 'Users are requesting this feature',
+        effort: 'medium',
+        artifact: 'cursor_prompt',
+        evidence: [],
+      };
+      
+      assessment.artifacts.cursorPrompt = await this.generateFeaturePrompt(
+        snapshot,
+        feedback.featureRequest
+      );
+    }
+    
+    return assessment;
+  }
+
+  private async generateFeaturePrompt(
+    snapshot: ProjectSnapshot,
+    feature: string
+  ): Promise<string> {
+    try {
+      const response = await this.anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 600,
+        messages: [{
+          role: 'user',
+          content: `Generate a Cursor AI prompt to add "${feature}" to ${snapshot.name}.
+
+Project type: ${snapshot.type}
+Recent files: ${snapshot.recentlyChangedFiles.slice(0, 5).join(', ')}
+
+The prompt should:
+1. State the specific feature to add
+2. List likely target files based on project structure
+3. Include acceptance criteria
+4. Be copy-paste ready
+
+Format as a code block.`
+        }],
+      });
+      
+      const content = response.content[0];
+      return content.type === 'text' ? content.text : this.fallbackFeaturePrompt(snapshot, feature);
+    } catch {
+      return this.fallbackFeaturePrompt(snapshot, feature);
+    }
+  }
+
+  private fallbackFeaturePrompt(snapshot: ProjectSnapshot, feature: string): string {
+    return `\`\`\`
+In ${snapshot.name}:
+
+Add ${feature}
+
+Based on user feedback requesting this feature.
+
+Target files: ${snapshot.recentlyChangedFiles.slice(0, 3).join(', ') || 'Check recent changes'}
+
+Acceptance criteria:
+- [ ] ${feature} is implemented
+- [ ] Works on desktop and mobile  
+- [ ] Deploy succeeds
+\`\`\``;
+  }
+
   private determineActionType(snapshot: ProjectSnapshot): ActionType {
     // If there's an operational blocker, it's a BUILD action
     if (snapshot.operationalBlocker && snapshot.operationalBlocker.severity === 'critical') {
@@ -95,17 +173,7 @@ export class Reasoner {
   ): NextAction {
     // BUILD actions
     if (actionType === 'build') {
-      if (snapshot.deployment.status === 'error') {
-        return {
-          action: `Fix deploy error: ${snapshot.deployment.errorCategory || 'unknown'} issue`,
-          actionType: 'build',
-          rationale: 'Nothing works until deploy is green',
-          effort: snapshot.deployment.errorCategory === 'config' ? 'small' : 'medium',
-          artifact: 'cursor_prompt',
-          evidence: shortcoming?.evidence || [],
-        };
-      }
-
+      // Check missing env vars FIRST (higher priority than generic deploy error)
       if (snapshot.missingEnvVars.length > 0) {
         const critical = snapshot.missingEnvVars.filter(v => 
           v.includes('API_KEY') || v.includes('SECRET') || v.includes('TOKEN')
@@ -116,6 +184,17 @@ export class Reasoner {
           rationale: critical.length > 0 ? 'Critical API keys needed' : 'Required configuration missing',
           effort: 'small',
           artifact: 'env_checklist',
+          evidence: shortcoming?.evidence || [],
+        };
+      }
+
+      if (snapshot.deployment.status === 'error') {
+        return {
+          action: `Fix deploy error: ${snapshot.deployment.errorCategory || 'unknown'} issue`,
+          actionType: 'build',
+          rationale: 'Nothing works until deploy is green',
+          effort: snapshot.deployment.errorCategory === 'config' ? 'small' : 'medium',
+          artifact: 'cursor_prompt',
           evidence: shortcoming?.evidence || [],
         };
       }
@@ -429,7 +508,7 @@ ${snapshot.description || 'A powerful new tool'}
     });
     checklist += '```\n\n';
     checklist += `**Add them here:** [Vercel Settings](${envVarsUrl})\n\n`;
-    checklist += '⚠️ Never paste secrets in Telegram. Add them directly in Vercel.';
+    checklist += 'After adding, click "Redeploy" in Vercel to pick up the new vars.';
     
     return checklist;
   }
