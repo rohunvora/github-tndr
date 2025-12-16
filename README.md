@@ -1,3 +1,11 @@
+<div align="center">
+  <img src="/.github/social-preview.png" alt="github-tndr" width="800" />
+  <p><strong>AI-powered Telegram bot that analyzes your GitHub repos and tells you whether to ship, focus, or kill each project</strong></p>
+  <p>
+    <a href="https://github-tndr.vercel.app"><strong>🚀 Live Demo</strong></a>
+  </p>
+</div>
+
 # Ship or Kill Bot 🚀☠️
 
 **AI-powered Telegram bot that analyzes your GitHub repos and tells you whether to ship, focus, or kill each project.**
