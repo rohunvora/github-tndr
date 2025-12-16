@@ -149,11 +149,16 @@ bot.command('next', async (ctx) => {
     // Mark as shown
     await markCardShown(card.full_name);
     
-    // Send as TEXT message (allows 4096 chars, reliable editing)
-    // formatRepoCard includes zero-width space + image URL for link preview
+    // Send as TEXT message with link preview for image
+    // Text messages allow 4096 chars and reliable editing
     await ctx.reply(formatRepoCard(card), {
       parse_mode: 'Markdown',
       reply_markup: cardKeyboard(session.id, session.version),
+      link_preview_options: card.cover_image_url ? {
+        url: card.cover_image_url,
+        show_above_text: true,
+        prefer_large_media: true,
+      } : undefined,
     });
   } catch (error) {
     console.error('Error in /next:', error);
@@ -679,6 +684,11 @@ _Mark done when complete._`;
       await ctx.reply(formatRepoCard(card), {
         parse_mode: 'Markdown',
         reply_markup: cardKeyboard(session.id, session.version),
+        link_preview_options: card.cover_image_url ? {
+          url: card.cover_image_url,
+          show_above_text: true,
+          prefer_large_media: true,
+        } : undefined,
       });
     } catch (error) {
       await ctx.reply(`❌ Failed: ${error instanceof Error ? error.message : 'Unknown'}`);
@@ -748,6 +758,11 @@ _Mark done when complete._`;
       await ctx.reply(formatRepoCard(card), {
         parse_mode: 'Markdown',
         reply_markup: cardKeyboard(session.id, session.version),
+        link_preview_options: card.cover_image_url ? {
+          url: card.cover_image_url,
+          show_above_text: true,
+          prefer_large_media: true,
+        } : undefined,
       });
     } catch (error) {
       await ctx.reply(`❌ Failed: ${error instanceof Error ? error.message : 'Unknown'}`);
@@ -781,6 +796,11 @@ _Mark done when complete._`;
       await ctx.reply(formatRepoCard(card), {
         parse_mode: 'Markdown',
         reply_markup: cardKeyboard(session.id, session.version),
+        link_preview_options: card.cover_image_url ? {
+          url: card.cover_image_url,
+          show_above_text: true,
+          prefer_large_media: true,
+        } : undefined,
       });
     } catch (error) {
       await ctx.reply(`❌ Failed: ${error instanceof Error ? error.message : 'Unknown'}`);
