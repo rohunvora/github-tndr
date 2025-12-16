@@ -1,33 +1,28 @@
 # Ship or Kill Bot 🚀☠️
 
-A Telegram bot that helps you blast through your half-finished repos and decide: **ship it**, **cut to core**, or **kill it**.
+**AI-powered Telegram bot that analyzes your GitHub repos and tells you whether to ship, focus, or kill each project.**
 
-## The Problem
+Stop letting half-finished projects rot in your GitHub. This bot scans your repositories, identifies what's actually valuable, and gives you brutally honest recommendations: ship it as-is, cut to the core feature, or kill it entirely. Get paste-ready refactoring prompts and launch-ready tweets when you're done.
 
-You start lots of projects but don't finish them. The last 10% is the hardest:
-- Unclear what "done" looks like
-- Scope creep during vibecoding
-- High bar makes nothing feel ready
+## What It Does
 
-## The Solution
-
-A sharp analyst in your Telegram that:
-- Scans your repos and finds the **core value** (if any)
-- Gives honest verdicts: ship, cut to core, no core, dead
-- Generates **paste-ready Cursor prompts** for refactoring
-- Drafts **tweets** when you're ready to launch
-- Tracks decisions so repos don't rot in limbo
+- **Scans your GitHub repos** from the last N days and analyzes each one
+- **Identifies core value** by examining code structure, README, and commit patterns  
+- **Gives clear verdicts**: Ship as-is, Cut to core, No core found, or Dead project
+- **Generates Cursor prompts** with specific files to delete and acceptance criteria
+- **Drafts launch tweets** when you mark projects as shipped
+- **Tracks project states** so nothing falls through the cracks
 
 ## Commands
 
-| Command | What it does |
-|---------|--------------|
+| Command | Description |
+|---------|-------------|
 | `/scan` | Analyze repos from last 10 days |
 | `/scan 30` | Analyze repos from last 30 days |
 | `/status` | See counts by state (ready, dead, shipped, etc.) |
-| `/repo <name>` | Deep dive on one specific repo |
+| `/repo <name>` | Deep dive analysis on specific repo |
 
-## The Flow
+## How It Works
 
 ```
 You: /scan
@@ -55,53 +50,56 @@ Bot: Here's the Cursor prompt:
 │ Acceptance: App loads with only portfolio view. │
 └─────────────────────────────────────────────────┘
 
-Reply "done" when you've pushed.
-
 You: done
 
-Bot: [crypto-dashboard] ━━━ Ready to ship! ━━━
-Deploy: 🟢 Green
-Tweet: "real-time portfolio tracker. no login. crypto-dashboard.vercel.app"
-[Post this] [Edit tweet] [Not yet]
+Bot: Ready to ship! Here's your launch tweet:
+"Built a clean crypto portfolio tracker with real-time updates..."
 ```
 
 ## Setup
 
-1. Create a Telegram bot via [@BotFather](https://t.me/botfather)
-2. Get your chat ID via [@userinfobot](https://t.me/userinfobot)
-3. Set environment variables:
+1. **Clone and install**
+   ```bash
+   git clone https://github.com/yourusername/github-tndr
+   cd github-tndr
+   npm install
+   ```
 
-```bash
-TELEGRAM_BOT_TOKEN=your_bot_token
-USER_TELEGRAM_CHAT_ID=your_chat_id
-GITHUB_TOKEN=your_github_pat
-ANTHROPIC_API_KEY=your_anthropic_key
-KV_REST_API_URL=your_vercel_kv_url
-KV_REST_API_TOKEN=your_vercel_kv_token
-```
+2. **Environment variables**
+   ```bash
+   cp env.example.txt .env.local
+   ```
+   Fill in:
+   - `TELEGRAM_BOT_TOKEN` - Get from [@BotFather](https://t.me/botfather)
+   - `ANTHROPIC_API_KEY` - Get from [Anthropic Console](https://console.anthropic.com)
+   - `GITHUB_TOKEN` - Personal access token with repo read permissions
+   - `KV_*` - Vercel KV database credentials
 
-4. Deploy to Vercel
-5. Set webhook: `https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://your-app.vercel.app/api/telegram`
+3. **Deploy**
+   ```bash
+   vercel deploy
+   ```
+
+4. **Set webhook**
+   ```bash
+   curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook" \
+        -H "Content-Type: application/json" \
+        -d '{"url": "https://your-app.vercel.app/api/telegram"}'
+   ```
 
 ## Tech Stack
 
-- **Vercel** - Edge functions
-- **Grammy** - Telegram bot framework
-- **Anthropic Claude** - Repo analysis
-- **Vercel KV** - State storage
-- **GitHub API** - Repo data
+- **Runtime**: Node.js + TypeScript
+- **Bot Framework**: Grammy (Telegram Bot API)
+- **AI**: Anthropic Claude
+- **Database**: Vercel KV (Redis)
+- **Deployment**: Vercel serverless functions
+- **GitHub API**: REST API for repo analysis
 
-## Repo States
+## What This Isn't
 
-| State | Meaning |
-|-------|---------|
-| `ready` | Ready to ship (deploy green, tweet drafted) |
-| `has_core` | Has a valuable core, needs work to focus it |
-| `no_core` | Analyzed, no clear value found |
-| `dead` | Killed by user decision |
-| `shipped` | Launched! |
-| `analyzing` | Analysis in progress |
+This bot won't magically make you ship more. It's a decision-making tool that cuts through analysis paralysis by providing objective analysis of your projects. You still need to do the work.
 
-## License
+## Contributing
 
-MIT
+See [SETUP.md](SETUP.md) for detailed development setup instructions.
