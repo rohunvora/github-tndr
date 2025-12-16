@@ -10,11 +10,12 @@ import { stateManager } from '../lib/state.js';
 import { GitHubClient } from '../lib/github.js';
 import { TrackedRepo } from '../lib/core-types.js';
 import {
-  formatProgress, formatScanDigest, formatStatus, formatAnalysis, formatCursorPrompt,
-  GroupedRepos,
+  formatProgress, formatScanSummary, formatCategoryView, formatStatus, formatAnalysis, formatCursorPrompt,
+  GroupedRepos, CategoryKey,
 } from '../lib/bot/format.js';
 import {
   analysisKeyboard, toneKeyboard, nextActionsKeyboard, startKeyboard, retryKeyboard,
+  summaryKeyboard, categoryKeyboard,
 } from '../lib/bot/keyboards.js';
 import { verdictToState, reanalyzeRepo } from '../lib/bot/actions.js';
 
@@ -236,9 +237,9 @@ async function runScan(ctx: Context, days: number): Promise<void> {
     });
 
     const partial = timedOut || analyzed.length + errors.length < repos.length;
-    let digest = formatScanDigest(groups);
-    if (partial) digest = `⚠️ **Partial scan** (${analyzed.length}/${repos.length} - ${timedOut ? 'timeout' : 'incomplete'})\n\n` + digest;
-    await ctx.reply(digest, { parse_mode: 'Markdown' });
+    let summary = formatScanSummary(groups);
+    if (partial) summary = `⚠️ **Partial scan** (${analyzed.length}/${repos.length} - ${timedOut ? 'timeout' : 'incomplete'})\n\n` + summary;
+    await ctx.reply(summary, { parse_mode: 'Markdown', reply_markup: summaryKeyboard(groups) });
     await stateManager.cancelActiveScan();
 
     if (errors.length > 0) {
@@ -265,7 +266,7 @@ bot.on('callback_query:data', async (ctx) => {
     });
     return;
   }
-  if (action === 'listall') {
+  if (action === 'listall' || action === 'summary') {
     const all = await stateManager.getAllTrackedRepos();
     if (all.length === 0) { await ctx.reply('No repos tracked yet. Run /scan to get started.'); return; }
     const groups: GroupedRepos = {
@@ -273,7 +274,35 @@ bot.on('callback_query:data', async (ctx) => {
       no_core: all.filter(r => r.state === 'no_core'), dead: all.filter(r => r.state === 'dead'),
       shipped: all.filter(r => r.state === 'shipped'),
     };
-    await ctx.reply(formatScanDigest(groups), { parse_mode: 'Markdown' });
+    await ctx.reply(formatScanSummary(groups), { parse_mode: 'Markdown', reply_markup: summaryKeyboard(groups) });
+    return;
+  }
+  if (action === 'category') {
+    const category = parts[0] as CategoryKey;
+    const page = parseInt(parts[1] || '0', 10);
+    
+    const all = await stateManager.getAllTrackedRepos();
+    let filtered: TrackedRepo[];
+    
+    switch (category) {
+      case 'ship': filtered = all.filter(r => r.state === 'ready'); break;
+      case 'cut': filtered = all.filter(r => r.state === 'has_core'); break;
+      case 'no_core': filtered = all.filter(r => r.state === 'no_core'); break;
+      case 'dead': filtered = all.filter(r => r.state === 'dead'); break;
+      case 'shipped': filtered = all.filter(r => r.state === 'shipped'); break;
+      case 'all': default: filtered = all; break;
+    }
+    
+    const { message, hasMore } = formatCategoryView(category, filtered, page);
+    await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: categoryKeyboard(category, filtered, page, hasMore) });
+    return;
+  }
+  if (action === 'repo') {
+    const [owner, name] = parts;
+    const repo = await stateManager.getTrackedRepo(owner, name);
+    if (!repo) { await ctx.reply('Repo not found.'); return; }
+    const msg = await ctx.reply(formatAnalysis(repo), { parse_mode: 'Markdown', reply_markup: analysisKeyboard(repo) });
+    await stateManager.setMessageRepo(msg.message_id, owner, name);
     return;
   }
 

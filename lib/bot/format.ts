@@ -35,6 +35,62 @@ export function formatProgress(done: number, total: number, cached: number, erro
   return status;
 }
 
+export function formatScanSummary(groups: GroupedRepos): string {
+  const total = Object.values(groups).flat().length;
+  let msg = `━━━ Scan Complete ━━━\n\n`;
+  
+  if (groups.ship.length > 0) msg += `🚀 Ship: ${groups.ship.length}\n`;
+  if (groups.cut.length > 0) msg += `✂️ Cut to Core: ${groups.cut.length}\n`;
+  if (groups.no_core.length > 0) msg += `🔴 No Core: ${groups.no_core.length}\n`;
+  if (groups.dead.length > 0) msg += `☠️ Dead: ${groups.dead.length}\n`;
+  if (groups.shipped.length > 0) msg += `🏆 Shipped: ${groups.shipped.length}\n`;
+  
+  msg += `\n**${total}** repos total. Tap a category to see details.`;
+  return msg;
+}
+
+export type CategoryKey = 'ship' | 'cut' | 'no_core' | 'dead' | 'shipped' | 'all';
+
+const categoryLabels: Record<CategoryKey, string> = {
+  ship: '🚀 SHIP',
+  cut: '✂️ CUT TO CORE',
+  no_core: '🔴 NO CORE',
+  dead: '☠️ DEAD',
+  shipped: '🏆 SHIPPED',
+  all: '📋 ALL REPOS',
+};
+
+export function formatCategoryView(
+  category: CategoryKey,
+  repos: TrackedRepo[],
+  page: number = 0
+): { message: string; hasMore: boolean } {
+  const pageSize = 5;
+  const start = page * pageSize;
+  const pageRepos = repos.slice(start, start + pageSize);
+  const hasMore = repos.length > start + pageSize;
+  
+  let msg = `${categoryLabels[category]} (${repos.length})\n\n`;
+  
+  if (repos.length === 0) {
+    msg += `_No repos in this category._`;
+    return { message: msg, hasMore: false };
+  }
+  
+  pageRepos.forEach(repo => {
+    const oneLiner = repo.analysis?.one_liner || 'No description';
+    const display = oneLiner.length > 80 ? oneLiner.substring(0, 77) + '...' : oneLiner;
+    msg += `\`${repo.name}\`\n${display}\n\n`;
+  });
+  
+  if (hasMore) {
+    msg += `_... and ${repos.length - start - pageSize} more_`;
+  }
+  
+  return { message: msg, hasMore };
+}
+
+// Keep old function for backwards compatibility
 export function formatScanDigest(groups: GroupedRepos): string {
   const total = Object.values(groups).flat().length;
   let msg = `━━━ Scan Complete (${total} repos) ━━━\n\n`;
@@ -62,14 +118,13 @@ export function formatScanDigest(groups: GroupedRepos): string {
 export function formatStatus(counts: RepoCounts): string {
   return `📊 **Repo Status**
 
-🟢 Ready to ship: ${counts.ready}
-🟡 Has core (needs work): ${counts.has_core}
-🔴 No core found: ${counts.no_core}
-☠️ Dead: ${counts.dead}
-🚀 Shipped: ${counts.shipped}
-⏳ Analyzing: ${counts.analyzing}
-
-Total tracked: ${counts.total}`;
+\`🟢 Ready\`     ${counts.ready}
+\`🟡 Has Core\`  ${counts.has_core}
+\`🔴 No Core\`   ${counts.no_core}
+\`☠️ Dead\`      ${counts.dead}
+\`🚀 Shipped\`   ${counts.shipped}
+${counts.analyzing > 0 ? `\`⏳ Analyzing\` ${counts.analyzing}\n` : ''}
+**Total:** ${counts.total}`;
 }
 
 export function formatAnalysis(repo: TrackedRepo, seq?: number, total?: number): string {
