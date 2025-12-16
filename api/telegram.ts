@@ -143,22 +143,27 @@ bot.command('next', async (ctx) => {
       return;
     }
     
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/718b8e5f-a09b-4467-b116-89440bed2c56',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram.ts:next',message:'card generated',data:{repo:card.repo,full_name:card.full_name,cover_image_url:card.cover_image_url,has_cover:!!card.cover_image_url},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H2'})}).catch(()=>{});
+    // #endregion
+    
     // Create session for this card
     const session = await createCardSession(card);
     
     // Mark as shown
     await markCardShown(card.full_name);
     
+    // #region agent log
+    const linkPreviewOpts = card.cover_image_url ? { url: card.cover_image_url, show_above_text: true, prefer_large_media: true } : undefined;
+    fetch('http://127.0.0.1:7242/ingest/718b8e5f-a09b-4467-b116-89440bed2c56',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram.ts:next-send',message:'sending card',data:{link_preview_options:linkPreviewOpts,cover_url_type:typeof card.cover_image_url},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3-H4'})}).catch(()=>{});
+    // #endregion
+    
     // Send as TEXT message with link preview for image
     // Text messages allow 4096 chars and reliable editing
     await ctx.reply(formatRepoCard(card), {
       parse_mode: 'Markdown',
       reply_markup: cardKeyboard(session.id, session.version),
-      link_preview_options: card.cover_image_url ? {
-        url: card.cover_image_url,
-        show_above_text: true,
-        prefer_large_media: true,
-      } : undefined,
+      link_preview_options: linkPreviewOpts,
     });
   } catch (error) {
     console.error('Error in /next:', error);

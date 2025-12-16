@@ -255,6 +255,10 @@ export async function generateCard(
   const coverUrl = repo.cover_image_url 
     || `https://raw.githubusercontent.com/${fullName}/main/.github/social-preview.png`;
   
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/718b8e5f-a09b-4467-b116-89440bed2c56',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'card-generator.ts:buildCard',message:'cover URL resolved',data:{repo_name:repo.name,repo_cover_image_url:repo.cover_image_url,final_cover_url:coverUrl,used_fallback:!repo.cover_image_url},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H2'})}).catch(()=>{});
+  // #endregion
+  
   return {
     repo: repo.name,
     full_name: fullName,
