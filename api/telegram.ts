@@ -5,7 +5,7 @@ export const config = {
 import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import type { Update, UserFromGetMe } from 'grammy/types';
 import { Collector, ProjectSnapshot } from '../lib/collector.js';
-import { Reasoner, ProjectAssessment } from '../lib/reasoner.js';
+import { Reasoner, ProjectAssessment, ConversationMessage } from '../lib/reasoner.js';
 import { profileManager } from '../lib/profile.js';
 import { stateManager } from '../lib/state.js';
 import { EvidenceRef } from '../lib/types.js';
@@ -620,61 +620,104 @@ bot.on('message:text', async (ctx) => {
     }
   }
 
-  // Detect intent and generate appropriate artifact
-  const lowerMessage = userMessage.toLowerCase();
-  const userProfile = await profileManager.getUserProfile();
+  // Get conversation history for context
+  const conversationHistory = await stateManager.getRecentConversation(10);
+  const historyForReasoner: ConversationMessage[] = conversationHistory.map(m => ({
+    role: m.role,
+    content: m.content,
+  }));
+
+  // Collect all project snapshots for context
+  const allSnapshots = await collector.collectTopProjects(10);
   
-  // Re-analyze with user input context
-  const assessment = await reasoner.analyze(snapshot, userProfile);
+  // Use AI to understand the message intent
+  const understanding = await reasoner.understandMessage(
+    userMessage,
+    historyForReasoner,
+    allSnapshots,
+    activeProject
+  );
 
-  // Check for specific requests
-  if (lowerMessage.includes('prompt') || lowerMessage.includes('cursor') || lowerMessage.includes('fix')) {
-    if (assessment.artifacts.cursorPrompt) {
-      await ctx.reply(`**Cursor Prompt:**\n\n${assessment.artifacts.cursorPrompt}`, { parse_mode: 'Markdown' });
-    } else {
-      // Force generate cursor prompt
-      const forcedAssessment = await reasoner.analyze(snapshot, userProfile);
-      if (forcedAssessment.artifacts.cursorPrompt) {
-        await ctx.reply(`**Cursor Prompt:**\n\n${forcedAssessment.artifacts.cursorPrompt}`, { parse_mode: 'Markdown' });
+  const userProfile = await profileManager.getUserProfile();
+
+  // Handle based on intent
+  switch (understanding.intent) {
+    case 'question': {
+      // Direct response to questions
+      if (understanding.directResponse) {
+        await ctx.reply(understanding.directResponse, { parse_mode: 'Markdown' });
+        await stateManager.addConversationMessage({
+          role: 'assistant',
+          content: understanding.directResponse,
+          timestamp: new Date().toISOString(),
+        });
       }
+      return;
     }
-    return;
-  }
 
-  if (lowerMessage.includes('post') || lowerMessage.includes('launch') || lowerMessage.includes('announce')) {
-    if (assessment.artifacts.launchPost) {
-      await ctx.reply(`**Launch Post:**\n\n${assessment.artifacts.launchPost}`, { parse_mode: 'Markdown' });
+    case 'artifact_request':
+    case 'confirmation': {
+      // Generate the requested artifact
+      const assessment = await reasoner.analyze(snapshot, userProfile);
+      let response: string | null = null;
+
+      switch (understanding.artifactType) {
+        case 'cursor_prompt':
+          response = assessment.artifacts.cursorPrompt 
+            ? `**Cursor Prompt:**\n\n${assessment.artifacts.cursorPrompt}`
+            : null;
+          break;
+        case 'launch_post':
+          response = assessment.artifacts.launchPost
+            ? `**Launch Post:**\n\n${assessment.artifacts.launchPost}`
+            : null;
+          break;
+        case 'landing_copy':
+          response = assessment.artifacts.landingCopy
+            ? `**Landing Copy:**\n\n${assessment.artifacts.landingCopy}`
+            : null;
+          break;
+        case 'env_checklist':
+          response = assessment.artifacts.envChecklist;
+          break;
+      }
+
+      if (response) {
+        await ctx.reply(response, { parse_mode: 'Markdown' });
+        await stateManager.addConversationMessage({
+          role: 'assistant',
+          content: response,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        // Fallback: send whatever artifact is available
+        const artifactMessage = formatArtifactMessage(assessment);
+        if (artifactMessage) {
+          await ctx.reply(artifactMessage, { parse_mode: 'Markdown' });
+          await stateManager.addConversationMessage({
+            role: 'assistant',
+            content: artifactMessage,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+      return;
     }
-    return;
-  }
 
-  if (lowerMessage.includes('copy') || lowerMessage.includes('landing') || lowerMessage.includes('readme')) {
-    if (assessment.artifacts.landingCopy) {
-      await ctx.reply(`**Landing Copy:**\n\n${assessment.artifacts.landingCopy}`, { parse_mode: 'Markdown' });
+    case 'unclear':
+    default: {
+      // Provide helpful guidance
+      const response = understanding.directResponse || 
+        `What would you like to do with **${activeProject}**?\n\n• "prompt" → Cursor prompt\n• "post" → Launch post\n• "copy" → Landing copy\n• /status → See all projects`;
+      await ctx.reply(response, { parse_mode: 'Markdown' });
+      await stateManager.addConversationMessage({
+        role: 'assistant',
+        content: response,
+        timestamp: new Date().toISOString(),
+      });
+      return;
     }
-    return;
   }
-
-  if (lowerMessage.includes('env') || lowerMessage.includes('key') || lowerMessage.includes('var')) {
-    if (assessment.artifacts.envChecklist) {
-      await ctx.reply(assessment.artifacts.envChecklist, { parse_mode: 'Markdown' });
-    }
-    return;
-  }
-
-  // Default: send the most relevant artifact
-  const artifactMessage = formatArtifactMessage(assessment);
-  if (artifactMessage) {
-    await ctx.reply(artifactMessage, { parse_mode: 'Markdown' });
-  } else {
-    await ctx.reply(`Got it. What would you like to do with **${activeProject}**?\n\n• Say "prompt" for a Cursor prompt\n• Say "post" for a launch post\n• Say "copy" for landing copy`, { parse_mode: 'Markdown' });
-  }
-
-  await stateManager.addConversationMessage({
-    role: 'assistant',
-    content: artifactMessage || 'Options provided',
-    timestamp: new Date().toISOString(),
-  });
 });
 
 // ============ WEBHOOK HANDLER ============

@@ -3,6 +3,19 @@ import { ProjectSnapshot } from './collector.js';
 import { EvidenceRef, GTMStage, NextAction, Shortcoming, ActionType } from './types.js';
 import { UserProfile } from './profile.js';
 
+// ============ CONVERSATION TYPES ============
+
+export interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ConversationResponse {
+  intent: 'question' | 'artifact_request' | 'confirmation' | 'unclear';
+  artifactType?: 'cursor_prompt' | 'launch_post' | 'landing_copy' | 'env_checklist' | 'none';
+  directResponse?: string;  // For questions, this is the answer
+}
+
 // ============ PROJECT ASSESSMENT ============
 
 export interface ProjectAssessment {
@@ -100,6 +113,123 @@ export class Reasoner {
     }
     
     return assessment;
+  }
+
+  /**
+   * Understand user message intent and generate appropriate response.
+   * This handles conversational messages that aren't simple keyword triggers.
+   */
+  async understandMessage(
+    userMessage: string,
+    conversationHistory: ConversationMessage[],
+    projectSnapshots: ProjectSnapshot[],
+    activeProject?: string
+  ): Promise<ConversationResponse> {
+    const projectSummaries = projectSnapshots.map(p => ({
+      name: p.name,
+      stage: p.gtmStage,
+      status: p.deployment.status,
+      url: p.deployment.url,
+      hasBlocker: !!(p.operationalBlocker || p.gtmBlocker),
+      blockerIssue: p.operationalBlocker?.issue || p.gtmBlocker?.issue,
+    }));
+
+    const recentHistory = conversationHistory.slice(-6).map(m => 
+      `${m.role}: ${m.content.substring(0, 200)}`
+    ).join('\n');
+
+    try {
+      const response = await this.anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 600,
+        messages: [{
+          role: 'user',
+          content: `You are a project assistant bot. Understand the user's message and respond appropriately.
+
+**User's message:** "${userMessage}"
+
+**Active project:** ${activeProject || 'None'}
+
+**Available projects:**
+${JSON.stringify(projectSummaries, null, 2)}
+
+**Recent conversation:**
+${recentHistory || 'No previous messages'}
+
+**Your task:**
+1. Determine the user's intent
+2. If they're asking a QUESTION (about projects, status, what to do, etc.), answer it directly
+3. If they're requesting an ARTIFACT (cursor prompt, launch post, etc.), indicate which one
+4. If they're confirming something ("yeah", "sure", "do it"), treat as confirmation of the last offered action
+5. If unclear, ask for clarification
+
+Respond in this JSON format:
+{
+  "intent": "question" | "artifact_request" | "confirmation" | "unclear",
+  "artifactType": "cursor_prompt" | "launch_post" | "landing_copy" | "env_checklist" | "none",
+  "directResponse": "Your response to the user (required for questions, optional for others)"
+}
+
+Keep directResponse concise and actionable. If listing projects, use a simple format.
+Only output the JSON, nothing else.`
+        }],
+      });
+
+      const content = response.content[0];
+      if (content.type !== 'text') {
+        return this.fallbackUnderstanding(userMessage);
+      }
+
+      try {
+        // Extract JSON from response (handle potential markdown wrapping)
+        let jsonStr = content.text.trim();
+        if (jsonStr.startsWith('```')) {
+          jsonStr = jsonStr.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+        }
+        return JSON.parse(jsonStr) as ConversationResponse;
+      } catch {
+        // If JSON parsing fails, treat the whole response as a direct answer
+        return {
+          intent: 'question',
+          directResponse: content.text,
+        };
+      }
+    } catch (error) {
+      console.error('Understanding error:', error);
+      return this.fallbackUnderstanding(userMessage);
+    }
+  }
+
+  private fallbackUnderstanding(userMessage: string): ConversationResponse {
+    const lower = userMessage.toLowerCase();
+    
+    // Simple keyword fallback
+    if (lower.includes('list') || lower.includes('projects') || lower.includes('status') || lower.includes('what')) {
+      return {
+        intent: 'question',
+        directResponse: 'Use /status to see all your projects, or /check to analyze the most active one.',
+      };
+    }
+    
+    if (lower.includes('yeah') || lower.includes('yes') || lower.includes('sure') || lower.includes('ok')) {
+      return {
+        intent: 'confirmation',
+        artifactType: 'launch_post', // Default to what was likely offered
+      };
+    }
+    
+    if (lower.includes('prompt') || lower.includes('cursor') || lower.includes('fix')) {
+      return { intent: 'artifact_request', artifactType: 'cursor_prompt' };
+    }
+    
+    if (lower.includes('post') || lower.includes('launch') || lower.includes('announce')) {
+      return { intent: 'artifact_request', artifactType: 'launch_post' };
+    }
+    
+    return {
+      intent: 'unclear',
+      directResponse: 'Not sure what you need. Try /status to see projects, or ask me for a "cursor prompt", "launch post", or "landing copy".',
+    };
   }
 
   private async generateFeaturePrompt(
