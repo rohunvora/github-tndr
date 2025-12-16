@@ -95,6 +95,37 @@ Bot: Ready to ship! Here's your launch tweet:
         -d '{"url": "https://your-app.vercel.app/api/telegram"}'
    ```
 
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph You["📱 You"]
+        TG[Telegram]
+    end
+    
+    subgraph Vercel["⚡ Vercel Edge"]
+        API["/api/telegram"]
+        Bot["Grammy Bot"]
+    end
+    
+    subgraph External["🌐 External"]
+        GH["GitHub API"]
+        Claude["Claude AI"]
+        KV[("Vercel KV")]
+    end
+    
+    TG -->|webhook| API
+    API --> Bot
+    Bot -->|fetch repos| GH
+    Bot -->|analyze| Claude
+    Bot <-->|state| KV
+    Bot -->|response| TG
+    
+    style You fill:#1a1a2e,stroke:#00d4ff,color:#fff
+    style Vercel fill:#000,stroke:#fff,color:#fff
+    style External fill:#1a1a2e,stroke:#7c3aed,color:#fff
+```
+
 ## Tech Stack
 
 - **Runtime**: Node.js + TypeScript
