@@ -170,6 +170,14 @@ bot.command('next', async (ctx) => {
 
 bot.command('scan', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
+  
+  // Check if scan already running to prevent webhook retry duplicates
+  const activeScan = await stateManager.getActiveScan();
+  if (activeScan) {
+    await ctx.reply('⏳ Scan already in progress. Use /cancel to stop it.');
+    return;
+  }
+  
   const daysMatch = (ctx.message?.text || '').match(/\/scan\s+(\d+)/);
   await runScan(ctx, daysMatch ? parseInt(daysMatch[1], 10) : 10);
 });
@@ -232,6 +240,14 @@ bot.command('repo', async (ctx) => {
 async function runScan(ctx: Context, days: number): Promise<void> {
   const startTime = Date.now();
   const TIMEOUT_MS = 55000;
+  
+  // Double-check no scan is running (race condition guard)
+  const existingScan = await stateManager.getActiveScan();
+  if (existingScan) {
+    // Another scan started between command check and here - silently exit
+    return;
+  }
+  
   const scanId = `scan_${Date.now()}`;
   await stateManager.setActiveScan(scanId);
 
@@ -897,7 +913,15 @@ _Mark done when complete._`;
 
   // ============ GLOBAL ACTIONS ============
   
-  if (action === 'quickscan') { await runScan(ctx, 10); return; }
+  if (action === 'quickscan') {
+    const activeScan = await stateManager.getActiveScan();
+    if (activeScan) {
+      await ctx.answerCallbackQuery({ text: 'Scan already in progress' });
+      return;
+    }
+    await runScan(ctx, 10);
+    return;
+  }
   if (action === 'showstatus') {
     await ctx.reply(formatStatus(await stateManager.getRepoCounts()), {
       parse_mode: 'Markdown',
@@ -917,8 +941,8 @@ _Mark done when complete._`;
     return;
   }
   if (action === 'category') {
-    const category = parts[0] as CategoryKey;
-    const page = parseInt(parts[1] || '0', 10);
+    const category = parts[1] as CategoryKey;
+    const page = parseInt(parts[2] || '0', 10);
     
     const all = await stateManager.getAllTrackedRepos();
     let filtered: TrackedRepo[];
