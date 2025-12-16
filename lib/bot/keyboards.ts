@@ -122,37 +122,35 @@ export function retryKeyboard(): InlineKeyboard {
   return new InlineKeyboard().text('🔄 Retry', 'quickscan');
 }
 
-// ============ FEED CARD KEYBOARDS ============
+// ============ FEED CARD KEYBOARDS (Session-Based) ============
 
 /**
- * Main card keyboard with Do It / Skip / Go Deeper
+ * Main card keyboard with Do It / Skip / Go Deeper / Ship
+ * Uses short session IDs to stay under 64-byte callback limit
+ * Format: action:sessionId:version
  */
-export function cardKeyboard(card: RepoCard): InlineKeyboard {
-  const id = card.full_name; // owner/name
-  const kb = new InlineKeyboard();
-  
-  // Primary action row
-  kb.text('⚡ Do It', `card_doit:${id}`);
-  kb.text('⏭️ Skip', `card_skip:${id}`);
-  kb.row();
-  
-  // Secondary actions
-  kb.text('🔍 Go Deeper', `card_deeper:${id}`);
-  
-  return kb;
+export function cardKeyboard(sessionId: string, version: number): InlineKeyboard {
+  const v = version;
+  return new InlineKeyboard()
+    .text('⚡ Do It', `do:${sessionId}:${v}`)
+    .text('⏭️ Skip', `skip:${sessionId}:${v}`)
+    .row()
+    .text('🔍 Deeper', `deep:${sessionId}:${v}`)
+    .text('🚀 Ship', `ship:${sessionId}:${v}`);
 }
 
 /**
  * Keyboard after "Do It" - shows the artifact was generated
  */
-export function afterDoItKeyboard(fullName: string): InlineKeyboard {
+export function afterDoItKeyboard(sessionId: string, version: number): InlineKeyboard {
   return new InlineKeyboard()
-    .text('✅ Done, Next Card', `card_done:${fullName}`)
-    .text('🔄 Regenerate', `card_doit:${fullName}`);
+    .text('✅ Done', `done:${sessionId}:${version}`)
+    .text('🔄 Regenerate', `do:${sessionId}:${version}`);
 }
 
 /**
  * Keyboard for completion message (after push detected)
+ * Uses full_name for legacy compatibility with webhook
  */
 export function completionKeyboard(fullName: string): InlineKeyboard {
   return new InlineKeyboard()
@@ -164,12 +162,23 @@ export function completionKeyboard(fullName: string): InlineKeyboard {
 }
 
 /**
- * Keyboard for deep dive view
+ * Keyboard for deep dive view with Back + Ship
  */
-export function deepDiveKeyboard(fullName: string): InlineKeyboard {
+export function deepDiveKeyboard(sessionId: string, version: number): InlineKeyboard {
   return new InlineKeyboard()
-    .text('⬅️ Back to Feed', `card_next`)
-    .text('🚀 Mark Shipped', `card_shipped:${fullName}`);
+    .text('⬅️ Back', `back:${sessionId}:${version}`)
+    .text('🚀 Ship', `ship:${sessionId}:${version}`)
+    .row()
+    .text('⚡ Do Step 1', `dostep:${sessionId}:${version}:0`);
+}
+
+/**
+ * Keyboard for ship confirmation (two-step)
+ */
+export function shipConfirmKeyboard(sessionId: string, version: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('✅ Yes, Ship It', `shipok:${sessionId}:${version}`)
+    .text('⬅️ Cancel', `back:${sessionId}:${version}`);
 }
 
 /**
@@ -199,4 +208,28 @@ export function intentionConfirmKeyboard(fullName: string, action: string): Inli
   return new InlineKeyboard()
     .text('✅ Yes, remind me', `intention_confirm:${fullName}:${encodedAction}`)
     .text('❌ No', `intention_cancel:${fullName}`);
+}
+
+// ============ LEGACY KEYBOARDS (for backwards compatibility) ============
+
+/**
+ * Legacy card keyboard using full_name (for webhook/cron handlers)
+ */
+export function legacyCardKeyboard(card: RepoCard): InlineKeyboard {
+  const id = card.full_name;
+  return new InlineKeyboard()
+    .text('⚡ Do It', `card_doit:${id}`)
+    .text('⏭️ Skip', `card_skip:${id}`)
+    .row()
+    .text('🔍 Go Deeper', `card_deeper:${id}`)
+    .text('🚀 Ship', `card_shipped:${id}`);
+}
+
+/**
+ * Legacy deep dive keyboard using full_name
+ */
+export function legacyDeepDiveKeyboard(fullName: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('⬅️ Back to Feed', `card_next`)
+    .text('🚀 Mark Shipped', `card_shipped:${fullName}`);
 }

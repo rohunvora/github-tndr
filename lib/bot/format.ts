@@ -185,7 +185,7 @@ ${more}
 
 // ============ FEED CARD FORMATTING ============
 
-function stageLabel(stage: ProjectStage): string {
+export function stageLabel(stage: ProjectStage): string {
   const labels: Record<ProjectStage, string> = {
     building: '🔨 Building',
     packaging: '📦 Packaging',
@@ -205,11 +205,17 @@ function confidenceIndicator(confidence: 'high' | 'medium' | 'low'): string {
 }
 
 /**
- * Format a RepoCard for Telegram display
- * Returns the caption text (image is sent separately)
+ * Format a RepoCard for Telegram display as TEXT message
+ * Uses zero-width space + URL to trigger link preview for cover image
+ * Text messages allow 4096 chars (vs 1024 caption limit)
  */
 export function formatRepoCard(card: RepoCard): string {
   const lines: string[] = [];
+  
+  // Zero-width space + URL triggers link preview for cover image
+  if (card.cover_image_url) {
+    lines.push(`[​](${card.cover_image_url})`);
+  }
   
   // Header: Name + Stage
   lines.push(`**${card.repo}** ${stageLabel(card.stage)}`);
@@ -259,6 +265,7 @@ _Come back tomorrow for a fresh stack, or use /scan to analyze new repos._`;
 
 /**
  * Format deep dive view (expanded card with multiple steps)
+ * Fits within 4096 char text message limit
  */
 export function formatDeepDive(
   card: RepoCard,
@@ -292,6 +299,31 @@ export function formatDeepDive(
   });
   
   return lines.join('\n');
+}
+
+/**
+ * Format ship confirmation message
+ */
+export function formatShipConfirm(repoName: string): string {
+  return `**Ship ${repoName}?**
+
+This marks it shipped and removes it from your feed.`;
+}
+
+/**
+ * Format shipped success message
+ */
+export function formatShipped(repoName: string): string {
+  return `🚀 **${repoName}** shipped!
+
+Congrats! Use /next for your next task.`;
+}
+
+/**
+ * Format card with "artifact sent" indicator
+ */
+export function formatRepoCardWithArtifact(card: RepoCard): string {
+  return formatRepoCard(card) + '\n\n_⚡ Artifact sent below_';
 }
 
 /**
