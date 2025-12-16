@@ -961,7 +961,8 @@ _Mark done when complete._`;
     return;
   }
   if (action === 'repo') {
-    const [owner, name] = parts;
+    const owner = parts[1];
+    const name = parts[2];
     const repo = await stateManager.getTrackedRepo(owner, name);
     if (!repo) { await ctx.reply('Repo not found.'); return; }
     const msg = await ctx.reply(formatAnalysis(repo), { parse_mode: 'Markdown', reply_markup: analysisKeyboard(repo) });
@@ -969,8 +970,9 @@ _Mark done when complete._`;
     return;
   }
 
-  // Repo-specific actions
-  const [owner, name] = parts;
+  // Repo-specific actions (format: action:owner:name)
+  const owner = parts[1];
+  const name = parts[2];
   const repo = await stateManager.getTrackedRepo(owner, name);
 
   if (action === 'retryname') {
