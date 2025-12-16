@@ -128,28 +128,24 @@ CRITICAL: DO NOT GENERATE:
 - Laptops, monitors, or computer screens showing the product
 - Stock photo style images with people or hands
 - "Marketing shots" or "product photography"
-- 3D renders of devices (unless it's a mobile app)
+- 3D renders of devices or phone mockups
+- Vertical/portrait orientation - ALWAYS use landscape 16:9
 
 WHAT TO GENERATE:
 - The UI itself, floating on a clean background
 - A direct screenshot-style view of the interface
 - Clean, flat design with subtle shadows
+- LANDSCAPE orientation (16:9)
 
-THE 3 VISUAL MODES:
+THE 2 VISUAL MODES:
 
-1. MODE A: "TERMINAL" (CLI, DevTools, Libraries, APIs)
+1. MODE: "TERMINAL" (CLI, DevTools, Libraries, APIs)
    - Show: A terminal window or code editor pane, floating
    - Background: Dark charcoal or navy, matte
    - Style: Monospace font, syntax highlighting, clean borders
    - NO laptops. Just the terminal window itself.
 
-2. MODE B: "MOBILE" (Apps, Chat, Social, Consumer)
-   - Show: iPhone frame with the app UI inside
-   - Background: Solid vibrant color (lime green, hot pink, electric blue)
-   - Style: High contrast, the phone is the hero
-   - This is the ONLY mode where a device frame is acceptable.
-
-3. MODE C: "DASHBOARD" (SaaS, Web Apps, Analytics, B2B)
+2. MODE: "DASHBOARD" (SaaS, Web Apps, Analytics, B2B, Consumer Apps)
    - Show: Browser window or UI cards floating, NO laptop around it
    - Background: Off-white, cream, or soft gradient
    - Style: Rounded corners, soft shadows, plenty of whitespace
@@ -159,6 +155,7 @@ MANDATORY:
 1. Show the product WORKING with real-looking data
 2. The product name must appear as text in the image
 3. NO STOCK PHOTO AESTHETICS - this should look like a UI screenshot, not a photo
+4. ALWAYS landscape 16:9 aspect ratio
 `;
 
 export function buildCoverPrompt(repo: TrackedRepo): { prompt: string; aspectRatio: string } {
@@ -167,17 +164,13 @@ export function buildCoverPrompt(repo: TrackedRepo): { prompt: string; aspectRat
     throw new Error('Cannot generate cover without analysis');
   }
 
-  // Determine mode and aspect ratio based on product type
+  // Determine mode based on product type (always 16:9 for README context)
   const whatItDoes = a.what_it_does.toLowerCase();
-  let mode: 'terminal' | 'mobile' | 'dashboard' = 'dashboard';
-  let aspectRatio = '16:9';
+  let mode: 'terminal' | 'dashboard' = 'dashboard';
+  const aspectRatio = '16:9'; // Always landscape for README display
 
   if (whatItDoes.includes('cli') || whatItDoes.includes('terminal') || whatItDoes.includes('library') || whatItDoes.includes('api') || whatItDoes.includes('script')) {
     mode = 'terminal';
-    aspectRatio = '16:9';
-  } else if (whatItDoes.includes('mobile') || whatItDoes.includes('ios') || whatItDoes.includes('android') || whatItDoes.includes('app')) {
-    mode = 'mobile';
-    aspectRatio = '9:16';
   }
 
   const prompt = `
@@ -195,20 +188,12 @@ ${mode === 'terminal' ? `
 Show a floating terminal/code editor window on a dark matte background.
 Inside the terminal, show realistic output that demonstrates: ${a.core_value}
 Example: command prompts, success messages, code snippets.
-` : ''}
-
-${mode === 'mobile' ? `
-Show an iPhone with the app UI on screen.
-Place it on a solid vibrant background (lime green, electric blue, or hot pink).
-The UI should show: ${a.core_value}
-` : ''}
-
-${mode === 'dashboard' ? `
+` : `
 Show the web UI floating on an off-white/cream background. NO LAPTOP.
 Just the browser window or UI cards with soft shadows.
 The interface should display: ${a.core_value}
 Style: Clean, minimal, like Stripe or Linear marketing screenshots.
-` : ''}
+`}
 
 IMPORTANT:
 - Include the text "${repo.name}" somewhere visible in the image

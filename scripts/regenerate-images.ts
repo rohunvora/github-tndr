@@ -15,7 +15,6 @@ import 'dotenv/config';
 import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { generateRepoCover } from '../lib/nano-banana.js';
-import { buildCoverPrompt } from '../lib/prompts.js';
 import { TrackedRepo } from '../lib/core-types.js';
 
 const IMAGES_DIR = join(process.cwd(), 'output', 'images');
@@ -126,13 +125,11 @@ async function main() {
         console.log(`│  📦 Backed up existing image`);
       }
 
-      // Generate new image with dynamic aspect ratio
-      console.log(`│  🎨 Generating with Gemini 3 Pro Image...`);
+      // Generate new image (always 16:9 landscape)
+      console.log(`│  🎨 Generating with Gemini 3 Pro Image (16:9)...`);
       const start = Date.now();
-      const { aspectRatio } = buildCoverPrompt(repo);
-      console.log(`│     Mode: ${aspectRatio === '9:16' ? 'Mobile (9:16)' : 'Desktop (16:9)'}`);
       
-      const imageBuffer = await generateRepoCover(repo, aspectRatio);
+      const imageBuffer = await generateRepoCover(repo);
       writeFileSync(imagePath, imageBuffer);
       
       const duration = ((Date.now() - start) / 1000).toFixed(1);

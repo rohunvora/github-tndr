@@ -20,7 +20,8 @@ import { RepoAnalyzer } from '../lib/analyzer.js';
 import { ReadmeGenerator, ReadmeContext, formatReadmeFilename } from '../lib/readme-generator.js';
 import { scoreAndSortRepos, RepoPromiseScore } from '../lib/promise-scorer.js';
 import { CoreAnalysis, TrackedRepo } from '../lib/core-types.js';
-import { generateRepoCover } from '../lib/nano-banana.js';
+import { generateRepoCover, polishScreenshot } from '../lib/nano-banana.js';
+import { screenshotUrl, isUrlAccessible, closeBrowser } from '../lib/screenshot.js';
 
 // ============ CONFIG ============
 
@@ -50,6 +51,40 @@ function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   return `${(ms / 60000).toFixed(1)}m`;
+}
+
+// ============ LIVE URL DETECTION ============
+
+async function detectLiveUrl(owner: string, repo: string, github: GitHubClient): Promise<string | null> {
+  // Check repo homepage field first
+  const info = await github.getRepoInfo(owner, repo);
+  if (info?.homepage && info.homepage.startsWith('http')) {
+    return info.homepage;
+  }
+  
+  // Check for vercel.json → assume {repo}.vercel.app
+  const vercelJson = await github.getFileContent(owner, repo, 'vercel.json');
+  if (vercelJson) {
+    return `https://${repo}.vercel.app`;
+  }
+  
+  // Check for common URL patterns in README
+  const readme = await github.getFileContent(owner, repo, 'README.md');
+  if (readme) {
+    // Look for vercel.app URLs
+    const vercelMatch = readme.match(/https:\/\/[a-z0-9-]+\.vercel\.app/i);
+    if (vercelMatch) return vercelMatch[0];
+    
+    // Look for netlify URLs
+    const netlifyMatch = readme.match(/https:\/\/[a-z0-9-]+\.netlify\.app/i);
+    if (netlifyMatch) return netlifyMatch[0];
+    
+    // Look for github.io pages
+    const ghPagesMatch = readme.match(/https:\/\/[a-z0-9-]+\.github\.io\/[a-z0-9-]+/i);
+    if (ghPagesMatch) return ghPagesMatch[0];
+  }
+  
+  return null;
 }
 
 // ============ MAIN ============
@@ -237,29 +272,75 @@ async function main() {
       // Generate cover image
       let imagePath: string | null = null;
       if (process.env.GEMINI_API_KEY) {
-        console.log(`│  🎨 Generating cover image... (this takes 5-15s)`);
         const imageStart = Date.now();
         try {
-          // Create a minimal TrackedRepo for the image generator
-          const trackedRepo: TrackedRepo = {
-            id: `${owner}/${name}`,
-            name,
-            owner,
-            state: 'ready',
-            analysis,
-            analyzed_at: new Date().toISOString(),
-            pending_action: null,
-            pending_since: null,
-            last_message_id: null,
-            last_push_at: repo.pushed_at,
-            killed_at: null,
-            shipped_at: null,
-            cover_image_url: null,
-          };
-          // Import aspect ratio from prompt builder
-          const { buildCoverPrompt } = await import('../lib/prompts.js');
-          const { aspectRatio } = buildCoverPrompt(trackedRepo);
-          const imageBuffer = await generateRepoCover(trackedRepo, aspectRatio);
+          let imageBuffer: Buffer;
+          
+          // Try to detect and screenshot live URL first
+          const liveUrl = await detectLiveUrl(owner, name, github);
+          
+          if (liveUrl) {
+            console.log(`│  🔗 Live URL detected: ${liveUrl}`);
+            
+            // Check if URL is accessible
+            const isAccessible = await isUrlAccessible(liveUrl);
+            
+            if (isAccessible) {
+              console.log(`│  📸 Screenshotting live site...`);
+              const screenshotStart = Date.now();
+              const rawScreenshot = await screenshotUrl(liveUrl);
+              console.log(`│     Screenshot taken in ${formatDuration(Date.now() - screenshotStart)}`);
+              
+              console.log(`│  ✨ Polishing screenshot with AI...`);
+              const polishStart = Date.now();
+              imageBuffer = await polishScreenshot(rawScreenshot, {
+                name,
+                oneLiner: analysis.one_liner,
+                coreValue: analysis.core_value || analysis.one_liner,
+              });
+              console.log(`│     Polished in ${formatDuration(Date.now() - polishStart)}`);
+            } else {
+              console.log(`│  ⚠️  URL not accessible, falling back to AI generation`);
+              // Fall back to AI generation
+              const trackedRepo: TrackedRepo = {
+                id: `${owner}/${name}`,
+                name,
+                owner,
+                state: 'ready',
+                analysis,
+                analyzed_at: new Date().toISOString(),
+                pending_action: null,
+                pending_since: null,
+                last_message_id: null,
+                last_push_at: repo.pushed_at,
+                killed_at: null,
+                shipped_at: null,
+                cover_image_url: null,
+              };
+              console.log(`│  🎨 Generating AI mockup...`);
+              imageBuffer = await generateRepoCover(trackedRepo);
+            }
+          } else {
+            // No live URL - generate with AI
+            console.log(`│  🎨 No live URL - generating AI mockup...`);
+            const trackedRepo: TrackedRepo = {
+              id: `${owner}/${name}`,
+              name,
+              owner,
+              state: 'ready',
+              analysis,
+              analyzed_at: new Date().toISOString(),
+              pending_action: null,
+              pending_since: null,
+              last_message_id: null,
+              last_push_at: repo.pushed_at,
+              killed_at: null,
+              shipped_at: null,
+              cover_image_url: null,
+            };
+            imageBuffer = await generateRepoCover(trackedRepo);
+          }
+          
           imagePath = join(IMAGES_DIR, `${name}-cover.png`);
           writeFileSync(imagePath, imageBuffer);
           console.log(`│     Done in ${formatDuration(Date.now() - imageStart)}`);
@@ -351,10 +432,14 @@ async function main() {
     }
     console.log();
   }
+  
+  // Cleanup browser
+  await closeBrowser();
 }
 
 // Run
-main().catch(err => {
+main().catch(async err => {
   console.error('Fatal error:', err);
+  await closeBrowser();
   process.exit(1);
 });
