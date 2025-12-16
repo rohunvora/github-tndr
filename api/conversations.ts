@@ -4,28 +4,22 @@ export const config = {
 
 import { stateManager } from '../lib/state.js';
 
-// Endpoint to view recent conversations and test responses
-export default async function handler(req: Request) {
-  const url = new URL(req.url);
-  const limit = parseInt(url.searchParams.get('limit') || '20');
-  
+// Debug endpoint to view tracked repos
+export default async function handler() {
   try {
-    const conversations = await stateManager.getRecentConversation(limit);
-    const commitments = await stateManager.getCommitments();
-    const projects = await stateManager.getAllProjects();
+    const repos = await stateManager.getAllTrackedRepos();
+    const counts = await stateManager.getRepoCounts();
     
-    // Format for easy reading
-    const formatted = {
-      recentMessages: conversations.map(c => ({
-        role: c.role,
-        content: c.content,
-        time: new Date(c.timestamp).toLocaleString(),
+    return new Response(JSON.stringify({
+      counts,
+      repos: repos.map(r => ({
+        name: r.name,
+        state: r.state,
+        verdict: r.analysis?.verdict,
+        one_liner: r.analysis?.one_liner,
+        analyzed_at: r.analyzed_at,
       })),
-      activeCommitments: commitments.filter(c => !c.resolved),
-      trackedProjects: projects.length,
-    };
-
-    return new Response(JSON.stringify(formatted, null, 2), {
+    }, null, 2), {
       headers: { 'Content-Type': 'application/json' },
     });
   } catch (error) {
@@ -35,7 +29,3 @@ export default async function handler(req: Request) {
     });
   }
 }
-
-
-
-

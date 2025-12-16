@@ -1,29 +1,31 @@
 export const config = {
   runtime: 'edge',
-  maxDuration: 60, // Allow longer execution for scans
+  maxDuration: 60,
 };
 
-import { Bot, InlineKeyboard } from 'grammy';
+import { Bot, InlineKeyboard, Context } from 'grammy';
 import type { Update, UserFromGetMe } from 'grammy/types';
 import { RepoAnalyzer } from '../lib/analyzer.js';
 import { stateManager } from '../lib/state.js';
 import { GitHubClient } from '../lib/github.js';
-import { TrackedRepo, CoreAnalysis, RepoState } from '../lib/core-types.js';
+import { TrackedRepo } from '../lib/core-types.js';
+import {
+  formatProgress, formatScanDigest, formatStatus, formatAnalysis, formatCursorPrompt,
+  GroupedRepos,
+} from '../lib/bot/format.js';
+import {
+  analysisKeyboard, toneKeyboard, nextActionsKeyboard, startKeyboard, retryKeyboard,
+} from '../lib/bot/keyboards.js';
+import { verdictToState, reanalyzeRepo } from '../lib/bot/actions.js';
 
 // ============ BOT SETUP ============
 
 function getBotInfo(token: string): UserFromGetMe {
   const botId = parseInt(token.split(':')[0], 10);
   return {
-    id: botId,
-    is_bot: true,
-    first_name: 'ShipBot',
-    username: 'ship_or_kill_bot',
-    can_join_groups: true,
-    can_read_all_group_messages: false,
-    supports_inline_queries: false,
-    can_connect_to_business: false,
-    has_main_web_app: false,
+    id: botId, is_bot: true, first_name: 'ShipBot', username: 'ship_or_kill_bot',
+    can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false,
+    can_connect_to_business: false, has_main_web_app: false,
   };
 }
 
@@ -33,669 +35,452 @@ const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN!, {
 
 const chatId = process.env.USER_TELEGRAM_CHAT_ID!.trim();
 
-// Initialize clients lazily
 let analyzer: RepoAnalyzer | null = null;
 let github: GitHubClient | null = null;
 
 function getAnalyzer(): RepoAnalyzer {
-  if (!analyzer) {
-    analyzer = new RepoAnalyzer(
-      process.env.ANTHROPIC_API_KEY!,
-      process.env.GITHUB_TOKEN!
-    );
-  }
+  if (!analyzer) analyzer = new RepoAnalyzer(process.env.ANTHROPIC_API_KEY!, process.env.GITHUB_TOKEN!);
   return analyzer;
 }
 
 function getGitHub(): GitHubClient {
-  if (!github) {
-    github = new GitHubClient(process.env.GITHUB_TOKEN!);
-  }
+  if (!github) github = new GitHubClient(process.env.GITHUB_TOKEN!);
   return github;
 }
 
-// ============ MESSAGE FORMATTING ============
-
-function formatAnalysisMessage(
-  repo: TrackedRepo,
-  sequenceNum?: number,
-  totalRepos?: number
-): string {
-  const analysis = repo.analysis;
-  if (!analysis) {
-    return `━━━ ${repo.name} ━━━\nAnalysis failed.`;
-  }
-
-  const seqPrefix = sequenceNum && totalRepos ? `[${sequenceNum}/${totalRepos}] ` : '';
-  const stateEmoji = getStateEmoji(repo.state);
-
-  let msg = `${seqPrefix}━━━ ${repo.name} ━━━\n`;
-  msg += `${stateEmoji} ${analysis.one_liner}\n\n`;
-  msg += `${analysis.what_it_does}\n\n`;
-
-  if (analysis.has_core && analysis.core_value) {
-    msg += `**Core:** ${analysis.core_value}\n`;
-    if (analysis.why_core) {
-      msg += `**Why:** ${analysis.why_core}\n`;
-    }
-  }
-
-  if (analysis.cut.length > 0) {
-    msg += `\n**Cut:** ${analysis.cut.slice(0, 5).join(', ')}`;
-    if (analysis.cut.length > 5) {
-      msg += ` (+${analysis.cut.length - 5} more)`;
-    }
-    msg += '\n';
-  }
-
-  msg += `\n**Verdict:** ${analysis.verdict}\n`;
-  msg += `_${analysis.verdict_reason}_\n`;
-
-  if (analysis.tweet_draft) {
-    msg += `\n**Tweet:**\n\`\`\`\n${analysis.tweet_draft}\n\`\`\``;
-  }
-
-  return msg;
-}
-
-function getStateEmoji(state: RepoState): string {
-  switch (state) {
-    case 'ready': return '🟢';
-    case 'shipped': return '🚀';
-    case 'has_core': return '🟡';
-    case 'no_core': return '🔴';
-    case 'dead': return '☠️';
-    case 'analyzing': return '⏳';
-    default: return '⚪';
-  }
-}
-
-function createAnalysisKeyboard(repo: TrackedRepo): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  const repoId = `${repo.owner}:${repo.name}`;
-  const analysis = repo.analysis;
-
-  if (!analysis) {
-    keyboard.text('🔄 Retry', `retry:${repoId}`);
-    return keyboard;
-  }
-
-  switch (analysis.verdict) {
-    case 'ship':
-      keyboard.text('🚀 Post this', `ship:${repoId}`);
-      keyboard.text('✏️ Edit tweet', `edit:${repoId}`);
-      keyboard.row();
-      keyboard.text('⏸️ Not yet', `skip:${repoId}`);
-      break;
-
-    case 'cut_to_core':
-      keyboard.text('✂️ Cut to core', `cut:${repoId}`);
-      keyboard.text('🚀 Ship as-is', `ship:${repoId}`);
-      keyboard.row();
-      keyboard.text('☠️ Kill', `kill:${repoId}`);
-      break;
-
-    case 'no_core':
-      keyboard.text('🔍 Dig deeper', `deeper:${repoId}`);
-      keyboard.text('☠️ Kill', `kill:${repoId}`);
-      break;
-
-    case 'dead':
-      keyboard.text('☠️ Kill', `kill:${repoId}`);
-      keyboard.text('🔄 Revive', `revive:${repoId}`);
-      break;
-  }
-
-  return keyboard;
-}
-
-function formatCursorPrompt(repo: TrackedRepo): string {
-  const analysis = repo.analysis;
-  if (!analysis) return 'No analysis available.';
-
-  const deleteList = analysis.cut.map(f => `- ${f}`).join('\n');
-  const keepList = analysis.keep.join(', ');
-
-  return `┌─────────────────────────────────────────────────┐
-│ Refactor ${repo.name} to its core
-│                                                 
-│ Goal: Focus on ${analysis.core_value || 'the core functionality'}
-│                                                 
-│ Delete:                                         
-${analysis.cut.slice(0, 10).map(f => `│ - ${f}`).join('\n')}
-${analysis.cut.length > 10 ? `│ ... and ${analysis.cut.length - 10} more` : ''}
-│                                                 
-│ Keep: ${keepList.substring(0, 40)}${keepList.length > 40 ? '...' : ''}
-│                                                 
-│ Remove all imports/references to deleted files.
-│                                                 
-│ Acceptance: App loads with only the core.
-│ No console errors. Deploy succeeds.
-└─────────────────────────────────────────────────┘`;
+async function showTyping(ctx: Context): Promise<void> {
+  if (ctx.chat) await ctx.api.sendChatAction(ctx.chat.id, 'typing');
 }
 
 // ============ COMMANDS ============
 
 bot.command('start', async (ctx) => {
-  await ctx.reply(`👋 Ship or Kill Bot
+  const counts = await stateManager.getRepoCounts();
+  const parts = [];
+  if (counts.ready > 0) parts.push(`${counts.ready} ready to ship`);
+  if (counts.has_core > 0) parts.push(`${counts.has_core} need focus`);
+  if (counts.shipped > 0) parts.push(`${counts.shipped} shipped`);
+  const statusLine = parts.length > 0 ? `\n\n📊 ${parts.join(', ')}.` : '';
 
-I help you blast through your repos and decide: ship it, cut to core, or kill it.
+  await ctx.reply(
+    `**Ship or Kill**\n\nI analyze your repos and help you decide: ship it, cut to core, or kill it.${statusLine}\n\nUse /help for all commands.`,
+    { parse_mode: 'Markdown', reply_markup: startKeyboard() }
+  );
+});
 
-**Commands:**
-/scan - Analyze repos from last 10 days
-/scan 30 - Analyze repos from last 30 days
-/status - See counts by state
-/repo <name> - Deep dive on one repo
+bot.command('help', async (ctx) => {
+  await ctx.reply(`**Commands**
+/scan [days] — Analyze repos (default: 10 days)
+/status — See repo counts by state
+/repo <name> — Deep dive on one repo
+/cancel — Cancel running scan
 
-Reply to any analysis message to continue that thread.`);
+**Quick Actions**
+Type a repo name to see its full analysis.
+Reply to any analysis with:
+• "done" / "pushed" — Re-analyze after changes
+• "ship" / "shipped" — Mark as launched  
+• "kill" — Remove from tracking
+
+**States**
+🟢 Ready to ship | 🟡 Needs focus | 🔴 No core
+☠️ Dead | 🚀 Shipped | ⏳ Analyzing`, { parse_mode: 'Markdown' });
 });
 
 bot.command('scan', async (ctx) => {
-  const userId = ctx.from?.id.toString();
-  if (userId !== chatId) return;
+  if (ctx.from?.id.toString() !== chatId) return;
+  const daysMatch = (ctx.message?.text || '').match(/\/scan\s+(\d+)/);
+  await runScan(ctx, daysMatch ? parseInt(daysMatch[1], 10) : 10);
+});
 
-  // Parse days from command
-  const text = ctx.message?.text || '';
-  const daysMatch = text.match(/\/scan\s+(\d+)/);
-  const days = daysMatch ? parseInt(daysMatch[1], 10) : 10;
+bot.command('cancel', async (ctx) => {
+  if (ctx.from?.id.toString() !== chatId) return;
+  await stateManager.cancelActiveScan();
+  await ctx.reply('✅ Scan cancelled.');
+});
 
-  await ctx.reply(`⏳ Scanning repos from last ${days} days...`);
+bot.command('status', async (ctx) => {
+  if (ctx.from?.id.toString() !== chatId) return;
+  const counts = await stateManager.getRepoCounts();
+  await ctx.reply(formatStatus(counts), {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard().text('🔍 Scan', 'quickscan').text('📋 List All', 'listall'),
+  });
+});
+
+bot.command('repo', async (ctx) => {
+  if (ctx.from?.id.toString() !== chatId) return;
+  const repoName = (ctx.message?.text || '').replace('/repo', '').trim();
+  if (!repoName) { await ctx.reply('Usage: /repo <name>'); return; }
+
+  await ctx.reply(`⏳ Analyzing ${repoName}...`);
+  await showTyping(ctx);
 
   try {
-    const gh = getGitHub();
-    const repos = await gh.getRecentRepos(days);
+    const allRepos = await getGitHub().getUserRepos();
+    const repo = allRepos.find(r => r.name.toLowerCase() === repoName.toLowerCase());
+    if (!repo) { await ctx.reply(`❌ Repo "${repoName}" not found.`); return; }
 
+    const [owner, name] = repo.full_name.split('/');
+    const analysis = await getAnalyzer().analyzeRepo(owner, name);
+
+    const tracked: TrackedRepo = {
+      id: `${owner}/${name}`, name, owner,
+      state: verdictToState(analysis.verdict),
+      analysis, analyzed_at: new Date().toISOString(),
+      pending_action: null, pending_since: null, last_message_id: null,
+      last_push_at: repo.pushed_at, killed_at: null, shipped_at: null,
+    };
+    await stateManager.saveTrackedRepo(tracked);
+
+    const msg = await ctx.reply(formatAnalysis(tracked), {
+      parse_mode: 'Markdown', reply_markup: analysisKeyboard(tracked),
+    });
+    await stateManager.setMessageRepo(msg.message_id, owner, name);
+    await stateManager.updateRepoMessageId(owner, name, msg.message_id);
+  } catch (error) {
+    await ctx.reply(`❌ Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`, {
+      reply_markup: new InlineKeyboard().text('🔄 Retry', `retryname:${repoName}`),
+    });
+  }
+});
+
+// ============ SCAN LOGIC ============
+
+async function runScan(ctx: Context, days: number): Promise<void> {
+  const startTime = Date.now();
+  const TIMEOUT_MS = 55000;
+  const scanId = `scan_${Date.now()}`;
+  await stateManager.setActiveScan(scanId);
+
+  try {
+    const repos = await getGitHub().getRecentRepos(days);
     if (repos.length === 0) {
+      await stateManager.cancelActiveScan();
       await ctx.reply(`No repos found with activity in the last ${days} days.`);
       return;
     }
 
-    await ctx.reply(`Found ${repos.length} repos. Analyzing...`);
+    const progressMsg = await ctx.reply(formatProgress(0, repos.length, 0, 0));
+    const analyzed: TrackedRepo[] = [];
+    const errors: string[] = [];
+    let cached = 0;
+    let timedOut = false;
 
-    const scanId = `scan_${Date.now()}`;
-    const results = {
-      total: repos.length,
-      analyzed: 0,
-      ready: 0,
-      cut_to_core: 0,
-      no_core: 0,
-      dead: 0,
-      shipped: 0,
-    };
-
-    // Process repos in parallel (batches of 5 to avoid rate limits)
-    const batchSize = 5;
-    for (let i = 0; i < repos.length; i += batchSize) {
-      const batch = repos.slice(i, i + batchSize);
-
-      await Promise.all(
-        batch.map(async (repo, batchIndex) => {
-          const seqNum = i + batchIndex + 1;
-          const [owner, name] = repo.full_name.split('/');
-
-          try {
-            // Check if already tracked
-            let tracked = await stateManager.getTrackedRepo(owner, name);
-
-            // Check if this is rev-agg (shipped)
-            const isShipped = name === 'rev-agg';
-
-            if (!tracked) {
-              // Create new tracked repo
-              tracked = {
-                id: `${owner}/${name}`,
-                name,
-                owner,
-                state: isShipped ? 'shipped' : 'analyzing',
-                analysis: null,
-                analyzed_at: null,
-                pending_action: null,
-                pending_since: null,
-                last_message_id: null,
-                last_push_at: repo.pushed_at,
-                killed_at: null,
-                shipped_at: isShipped ? new Date().toISOString() : null,
-              };
-            }
-
-            // Skip analysis for shipped repos
-            if (isShipped) {
-              tracked.state = 'shipped';
-              await stateManager.saveTrackedRepo(tracked);
-              results.shipped++;
-              results.analyzed++;
-
-              const msg = await ctx.reply(
-                `[${seqNum}/${repos.length}] ━━━ ${name} ━━━\n🚀 Already shipped!\n\nThis is your launched project.`,
-                { reply_markup: new InlineKeyboard().text('📊 View stats', `stats:${owner}:${name}`) }
-              );
-              await stateManager.setMessageRepo(msg.message_id, owner, name);
-              return;
-            }
-
-            // Analyze the repo
-            const analyzerInstance = getAnalyzer();
-            const analysis = await analyzerInstance.analyzeRepo(owner, name);
-
-            // Update tracked repo
-            tracked.analysis = analysis;
-            tracked.analyzed_at = new Date().toISOString();
-            tracked.state = verdictToState(analysis.verdict);
-
-            await stateManager.saveTrackedRepo(tracked);
-
-            // Update results
-            results.analyzed++;
-            if (analysis.verdict === 'ship') results.ready++;
-            else if (analysis.verdict === 'cut_to_core') results.cut_to_core++;
-            else if (analysis.verdict === 'no_core') results.no_core++;
-            else if (analysis.verdict === 'dead') results.dead++;
-
-            // Send result message
-            const message = formatAnalysisMessage(tracked, seqNum, repos.length);
-            const keyboard = createAnalysisKeyboard(tracked);
-
-            const msg = await ctx.reply(message, {
-              parse_mode: 'Markdown',
-              reply_markup: keyboard,
-            });
-
-            // Store message -> repo mapping for reply-to
-            await stateManager.setMessageRepo(msg.message_id, owner, name);
-            await stateManager.updateRepoMessageId(owner, name, msg.message_id);
-          } catch (error) {
-            console.error(`Failed to analyze ${repo.full_name}:`, error);
-            results.analyzed++;
-
-            await ctx.reply(
-              `[${seqNum}/${repos.length}] ━━━ ${name} ━━━\n❌ Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-            );
-          }
-        })
-      );
-
-      // Small delay between batches
-      if (i + batchSize < repos.length) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+    for (let i = 0; i < repos.length; i += 5) {
+      if (Date.now() - startTime > TIMEOUT_MS) { timedOut = true; break; }
+      if (await stateManager.getActiveScan() !== scanId) {
+        await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, '⏹️ Scan cancelled.');
+        return;
       }
+
+      await Promise.all(repos.slice(i, i + 5).map(async (repo) => {
+        const [owner, name] = repo.full_name.split('/');
+        try {
+          let tracked = await stateManager.getTrackedRepo(owner, name);
+          if (!tracked) {
+            tracked = {
+              id: `${owner}/${name}`, name, owner, state: 'analyzing',
+              analysis: null, analyzed_at: null, pending_action: null, pending_since: null,
+              last_message_id: null, last_push_at: repo.pushed_at, killed_at: null, shipped_at: null,
+            };
+          }
+
+          if (tracked.state === 'shipped' || tracked.state === 'dead') {
+            cached++; analyzed.push(tracked); return;
+          }
+
+          const hasAnalysis = tracked.analysis !== null;
+          const hasNewCommits = new Date(repo.pushed_at).getTime() > (tracked.analyzed_at ? new Date(tracked.analyzed_at).getTime() : 0);
+          if (hasAnalysis && !hasNewCommits) {
+            cached++; analyzed.push(tracked); return;
+          }
+
+          const analysis = await getAnalyzer().analyzeRepo(owner, name);
+          tracked.analysis = analysis;
+          tracked.analyzed_at = new Date().toISOString();
+          tracked.last_push_at = repo.pushed_at;
+          tracked.state = verdictToState(analysis.verdict);
+          await stateManager.saveTrackedRepo(tracked);
+          analyzed.push(tracked);
+        } catch (error) {
+          errors.push(`${name}: ${error instanceof Error ? error.message : 'Unknown'}`);
+        }
+      }));
+
+      try {
+        await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
+          formatProgress(analyzed.length + errors.length, repos.length, cached, errors.length));
+      } catch { /* ignore */ }
     }
 
-    // Save scan results
-    await stateManager.saveScanResult(scanId, results);
-
-    // Send summary
-    await ctx.reply(
-      `✅ **Scan complete**
-
-${results.ready} ready to ship
-${results.cut_to_core} need focus (cut to core)
-${results.no_core} unclear (no core found)
-${results.dead} dead
-${results.shipped} already shipped
-
-Total: ${results.analyzed}/${results.total} analyzed`
-    );
-  } catch (error) {
-    console.error('Scan error:', error);
-    await ctx.reply(`❌ Scan failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
-});
-
-bot.command('status', async (ctx) => {
-  const userId = ctx.from?.id.toString();
-  if (userId !== chatId) return;
-
-  try {
-    const counts = await stateManager.getRepoCounts();
-
-    await ctx.reply(
-      `📊 **Repo Status**
-
-🟢 Ready to ship: ${counts.ready}
-🟡 Has core (needs work): ${counts.has_core}
-🔴 No core found: ${counts.no_core}
-☠️ Dead: ${counts.dead}
-🚀 Shipped: ${counts.shipped}
-⏳ Analyzing: ${counts.analyzing}
-
-Total tracked: ${counts.total}`
-    );
-  } catch (error) {
-    console.error('Status error:', error);
-    await ctx.reply('❌ Failed to get status.');
-  }
-});
-
-bot.command('repo', async (ctx) => {
-  const userId = ctx.from?.id.toString();
-  if (userId !== chatId) return;
-
-  const text = ctx.message?.text || '';
-  const repoName = text.replace('/repo', '').trim();
-
-  if (!repoName) {
-    await ctx.reply('Usage: /repo <name>');
-    return;
-  }
-
-  await ctx.reply(`⏳ Analyzing ${repoName}...`);
-
-  try {
-    const gh = getGitHub();
-    const allRepos = await gh.getUserRepos();
-    const repo = allRepos.find(r => r.name.toLowerCase() === repoName.toLowerCase());
-
-    if (!repo) {
-      await ctx.reply(`❌ Repo "${repoName}" not found.`);
+    if (await stateManager.getActiveScan() !== scanId) {
+      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, '⏹️ Scan cancelled.');
       return;
     }
 
-    const [owner, name] = repo.full_name.split('/');
-    const analyzerInstance = getAnalyzer();
-    const analysis = await analyzerInstance.analyzeRepo(owner, name);
+    try { await ctx.api.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch { /* ignore */ }
 
-    // Create/update tracked repo
-    const tracked: TrackedRepo = {
-      id: `${owner}/${name}`,
-      name,
-      owner,
-      state: verdictToState(analysis.verdict),
-      analysis,
-      analyzed_at: new Date().toISOString(),
-      pending_action: null,
-      pending_since: null,
-      last_message_id: null,
-      last_push_at: repo.pushed_at,
-      killed_at: null,
-      shipped_at: null,
+    const groups: GroupedRepos = {
+      ship: analyzed.filter(r => r.analysis?.verdict === 'ship'),
+      cut: analyzed.filter(r => r.analysis?.verdict === 'cut_to_core'),
+      no_core: analyzed.filter(r => r.analysis?.verdict === 'no_core'),
+      dead: analyzed.filter(r => r.analysis?.verdict === 'dead'),
+      shipped: analyzed.filter(r => r.state === 'shipped'),
     };
 
-    await stateManager.saveTrackedRepo(tracked);
-
-    // Send result
-    const message = formatAnalysisMessage(tracked);
-    const keyboard = createAnalysisKeyboard(tracked);
-
-    const msg = await ctx.reply(message, {
-      parse_mode: 'Markdown',
-      reply_markup: keyboard,
+    await stateManager.saveScanResult(scanId, {
+      total: repos.length, analyzed: analyzed.length,
+      ready: groups.ship.length, cut_to_core: groups.cut.length,
+      no_core: groups.no_core.length, dead: groups.dead.length, shipped: groups.shipped.length,
     });
 
-    await stateManager.setMessageRepo(msg.message_id, owner, name);
-    await stateManager.updateRepoMessageId(owner, name, msg.message_id);
+    const partial = timedOut || analyzed.length + errors.length < repos.length;
+    let digest = formatScanDigest(groups);
+    if (partial) digest = `⚠️ **Partial scan** (${analyzed.length}/${repos.length} - ${timedOut ? 'timeout' : 'incomplete'})\n\n` + digest;
+    await ctx.reply(digest, { parse_mode: 'Markdown' });
+    await stateManager.cancelActiveScan();
+
+    if (errors.length > 0) {
+      await ctx.reply(`⚠️ ${errors.length} failed:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more` : ''}`);
+    }
   } catch (error) {
-    console.error('Repo analysis error:', error);
-    await ctx.reply(`❌ Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    await stateManager.cancelActiveScan();
+    await ctx.reply(`❌ Scan failed: ${error instanceof Error ? error.message : 'Unknown'}`, { reply_markup: retryKeyboard() });
   }
-});
+}
 
 // ============ BUTTON HANDLERS ============
 
 bot.on('callback_query:data', async (ctx) => {
-  const data = ctx.callbackQuery.data;
-  const [action, owner, name] = data.split(':');
-
+  const [action, ...parts] = ctx.callbackQuery.data.split(':');
   await ctx.answerCallbackQuery();
 
-  const repo = await stateManager.getTrackedRepo(owner, name);
-  if (!repo) {
-    await ctx.reply(`Repo ${owner}/${name} not found.`);
+  // Global actions
+  if (action === 'quickscan') { await runScan(ctx, 10); return; }
+  if (action === 'showstatus') {
+    await ctx.reply(formatStatus(await stateManager.getRepoCounts()), {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text('🔍 Scan', 'quickscan').text('📋 List All', 'listall'),
+    });
+    return;
+  }
+  if (action === 'listall') {
+    const all = await stateManager.getAllTrackedRepos();
+    if (all.length === 0) { await ctx.reply('No repos tracked yet. Run /scan to get started.'); return; }
+    const groups: GroupedRepos = {
+      ship: all.filter(r => r.state === 'ready'), cut: all.filter(r => r.state === 'has_core'),
+      no_core: all.filter(r => r.state === 'no_core'), dead: all.filter(r => r.state === 'dead'),
+      shipped: all.filter(r => r.state === 'shipped'),
+    };
+    await ctx.reply(formatScanDigest(groups), { parse_mode: 'Markdown' });
     return;
   }
 
-  switch (action) {
-    case 'kill': {
-      await stateManager.updateRepoState(owner, name, 'dead');
-      await ctx.reply(`☠️ **${name}** killed. Off your plate.`);
-      break;
-    }
+  // Repo-specific actions
+  const [owner, name] = parts;
+  const repo = await stateManager.getTrackedRepo(owner, name);
 
-    case 'ship': {
+  if (action === 'retryname') {
+    await showTyping(ctx);
+    await ctx.reply(`⏳ Retrying analysis for ${owner}...`);
+    try {
+      const allRepos = await getGitHub().getUserRepos();
+      const found = allRepos.find(r => r.name.toLowerCase() === owner.toLowerCase());
+      if (!found) { await ctx.reply(`❌ Repo "${owner}" not found.`); return; }
+      const [o, n] = found.full_name.split('/');
+      const analysis = await getAnalyzer().analyzeRepo(o, n);
+      const tracked: TrackedRepo = {
+        id: `${o}/${n}`, name: n, owner: o, state: verdictToState(analysis.verdict),
+        analysis, analyzed_at: new Date().toISOString(),
+        pending_action: null, pending_since: null, last_message_id: null,
+        last_push_at: found.pushed_at, killed_at: null, shipped_at: null,
+      };
+      await stateManager.saveTrackedRepo(tracked);
+      const msg = await ctx.reply(formatAnalysis(tracked), { parse_mode: 'Markdown', reply_markup: analysisKeyboard(tracked) });
+      await stateManager.setMessageRepo(msg.message_id, o, n);
+    } catch (error) {
+      await ctx.reply(`❌ Retry failed: ${error instanceof Error ? error.message : 'Unknown'}`);
+    }
+    return;
+  }
+
+  if (!repo) { await ctx.reply(`Repo not found. Try /scan to refresh.`); return; }
+
+  switch (action) {
+    case 'kill':
+      await stateManager.updateRepoState(owner, name, 'dead');
+      await ctx.reply(`☠️ **${name}** killed. Off your plate.`, { parse_mode: 'Markdown', reply_markup: nextActionsKeyboard() });
+      break;
+
+    case 'ship':
       if (repo.analysis?.tweet_draft) {
-        await ctx.reply(
-          `🚀 **${name}** ready to ship!\n\n**Tweet:**\n\`\`\`\n${repo.analysis.tweet_draft}\n\`\`\`\n\nCopy and post. Reply "shipped" when done.`
-        );
+        await ctx.reply(`🚀 **${name}** ready!\n\n**Tweet:**\n\`\`\`\n${repo.analysis.tweet_draft}\n\`\`\`\n\nCopy and post, then tap "Posted!"`, {
+          parse_mode: 'Markdown',
+          reply_markup: new InlineKeyboard().text('✏️ Edit Tone', `edit:${owner}:${name}`).text('✅ Posted!', `shipped:${owner}:${name}`),
+        });
       } else {
-        await ctx.reply(`🚀 **${name}** marked ready. Generate a tweet with /repo ${name}`);
+        await ctx.reply(`🚀 **${name}** marked ready. Generate a tweet with /repo ${name}`, { parse_mode: 'Markdown' });
       }
       await stateManager.updateRepoState(owner, name, 'ready');
       break;
-    }
 
-    case 'cut': {
-      const prompt = formatCursorPrompt(repo);
-      await ctx.reply(
-        `✂️ **Cut to core for ${name}**\n\nPaste this into Cursor:\n\n\`\`\`\n${prompt}\n\`\`\`\n\nReply "done" when you've pushed the changes.`
-      );
+    case 'shipped':
+      await stateManager.updateRepoState(owner, name, 'shipped');
+      await ctx.reply(`🚀 **${name}** shipped! Nice work.\n\nReply with traction like "50 likes" or feedback.`, {
+        parse_mode: 'Markdown', reply_markup: nextActionsKeyboard(),
+      });
+      break;
+
+    case 'cut':
+      await ctx.reply(`✂️ **Cut to core: ${name}**\n\nPaste into Cursor:\n\n\`\`\`\n${formatCursorPrompt(repo)}\n\`\`\``, {
+        parse_mode: 'Markdown',
+        reply_markup: new InlineKeyboard().text('✅ Done, Re-analyze', `reanalyze:${owner}:${name}`).text('❌ Cancel', `cancelaction:${owner}:${name}`),
+      });
       await stateManager.setPendingAction(owner, name, 'cut_to_core');
       break;
-    }
 
-    case 'skip': {
-      await ctx.reply(`⏸️ **${name}** skipped for now.`);
+    case 'reanalyze':
+      await reanalyzeRepo(ctx, repo, getAnalyzer(), 'Re-analyzing', { clearPending: true });
       break;
-    }
 
-    case 'deeper': {
-      await ctx.reply(`⏳ Re-analyzing ${name} in depth...`);
+    case 'deeper':
+      await reanalyzeRepo(ctx, repo, getAnalyzer(), 'Re-analyzing in depth');
+      break;
+
+    case 'revive':
+      await reanalyzeRepo(ctx, repo, getAnalyzer(), 'Reviving', { clearKilled: true });
+      break;
+
+    case 'retry':
+      await reanalyzeRepo(ctx, repo, getAnalyzer(), 'Retrying analysis for');
+      break;
+
+    case 'cancelaction':
+      await stateManager.setPendingAction(owner, name, null);
+      await ctx.reply(`Cancelled. **${name}** unchanged.`, { parse_mode: 'Markdown' });
+      break;
+
+    case 'skip':
+      await ctx.reply(`⏸️ **${name}** skipped for now.`, { parse_mode: 'Markdown' });
+      break;
+
+    case 'edit':
+      await ctx.reply('What tone for the tweet?', {
+        reply_markup: new InlineKeyboard()
+          .text('Casual', `tone:${owner}:${name}:casual`).text('Professional', `tone:${owner}:${name}:pro`).row()
+          .text('Technical', `tone:${owner}:${name}:tech`).text('Hype', `tone:${owner}:${name}:hype`).row()
+          .text('❌ Keep Original', `ship:${owner}:${name}`),
+      });
+      break;
+
+    case 'tone':
+      const tone = parts[2];
+      await showTyping(ctx);
       try {
-        const analyzerInstance = getAnalyzer();
-        const analysis = await analyzerInstance.analyzeRepo(owner, name);
-        repo.analysis = analysis;
-        repo.state = verdictToState(analysis.verdict);
-        repo.analyzed_at = new Date().toISOString();
-        await stateManager.saveTrackedRepo(repo);
-
-        const message = formatAnalysisMessage(repo);
-        const keyboard = createAnalysisKeyboard(repo);
-        const msg = await ctx.reply(message, {
+        const newTweet = await getAnalyzer().regenerateTweet(repo, tone);
+        if (repo.analysis) {
+          repo.analysis.tweet_draft = newTweet;
+          await stateManager.saveTrackedRepo(repo);
+        }
+        const label = { casual: 'Casual', pro: 'Professional', tech: 'Technical', hype: 'Hype' }[tone] || tone;
+        await ctx.reply(`**${label} version:**\n\n\`\`\`\n${newTweet}\n\`\`\``, {
           parse_mode: 'Markdown',
-          reply_markup: keyboard,
+          reply_markup: new InlineKeyboard().text('✅ Use This', `ship:${owner}:${name}`).text('🔄 Try Again', `edit:${owner}:${name}`),
         });
-        await stateManager.setMessageRepo(msg.message_id, owner, name);
       } catch (error) {
-        await ctx.reply(`❌ Re-analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        await ctx.reply(`❌ Failed: ${error instanceof Error ? error.message : 'Unknown'}`);
       }
       break;
-    }
-
-    case 'revive': {
-      await ctx.reply(`⏳ Reviving ${name}...`);
-      try {
-        const analyzerInstance = getAnalyzer();
-        const analysis = await analyzerInstance.analyzeRepo(owner, name);
-        repo.analysis = analysis;
-        repo.state = verdictToState(analysis.verdict);
-        repo.analyzed_at = new Date().toISOString();
-        repo.killed_at = null;
-        await stateManager.saveTrackedRepo(repo);
-
-        const message = formatAnalysisMessage(repo);
-        const keyboard = createAnalysisKeyboard(repo);
-        const msg = await ctx.reply(message, {
-          parse_mode: 'Markdown',
-          reply_markup: keyboard,
-        });
-        await stateManager.setMessageRepo(msg.message_id, owner, name);
-      } catch (error) {
-        await ctx.reply(`❌ Revival failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      }
-      break;
-    }
-
-    case 'edit': {
-      await ctx.reply(`✏️ What tone do you want for the tweet? (casual, professional, technical, hype)`);
-      // TODO: Implement tweet editing flow
-      break;
-    }
-
-    case 'retry': {
-      await ctx.reply(`⏳ Retrying analysis for ${name}...`);
-      try {
-        const analyzerInstance = getAnalyzer();
-        const analysis = await analyzerInstance.analyzeRepo(owner, name);
-        repo.analysis = analysis;
-        repo.state = verdictToState(analysis.verdict);
-        repo.analyzed_at = new Date().toISOString();
-        await stateManager.saveTrackedRepo(repo);
-
-        const message = formatAnalysisMessage(repo);
-        const keyboard = createAnalysisKeyboard(repo);
-        const msg = await ctx.reply(message, {
-          parse_mode: 'Markdown',
-          reply_markup: keyboard,
-        });
-        await stateManager.setMessageRepo(msg.message_id, owner, name);
-      } catch (error) {
-        await ctx.reply(`❌ Retry failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      }
-      break;
-    }
   }
 });
 
-// ============ TEXT MESSAGE HANDLER (for reply-to and natural language) ============
+// ============ TEXT MESSAGE HANDLER ============
 
 bot.on('message:text', async (ctx) => {
-  const userMessage = ctx.message.text;
-  const userId = ctx.from?.id.toString();
+  const text = ctx.message.text;
+  if (ctx.from?.id.toString() !== chatId || text.startsWith('/')) return;
 
-  if (userId !== chatId) return;
-  if (userMessage.startsWith('/')) return;
-
-  // Check if this is a reply to a previous message
   const replyTo = ctx.message.reply_to_message;
   let targetRepo: TrackedRepo | null = null;
-
   if (replyTo) {
-    // Get repo from reply-to message
-    const repoRef = await stateManager.getMessageRepo(replyTo.message_id);
-    if (repoRef) {
-      targetRepo = await stateManager.getTrackedRepo(repoRef.owner, repoRef.name);
-    }
+    const ref = await stateManager.getMessageRepo(replyTo.message_id);
+    if (ref) targetRepo = await stateManager.getTrackedRepo(ref.owner, ref.name);
   }
 
-  // Natural language triggers
-  const lower = userMessage.toLowerCase().trim();
+  const lower = text.toLowerCase().trim();
 
-  // "done" / "pushed" / "fixed" - check pending action
-  if (['done', 'pushed', 'fixed', 'finished'].some(w => lower.includes(w))) {
-    if (targetRepo && targetRepo.pending_action) {
-      await ctx.reply(`⏳ Checking ${targetRepo.name}...`);
-
-      try {
-        const analyzerInstance = getAnalyzer();
-        const analysis = await analyzerInstance.analyzeRepo(targetRepo.owner, targetRepo.name);
-        targetRepo.analysis = analysis;
-        targetRepo.state = verdictToState(analysis.verdict);
-        targetRepo.analyzed_at = new Date().toISOString();
-        targetRepo.pending_action = null;
-        targetRepo.pending_since = null;
-        await stateManager.saveTrackedRepo(targetRepo);
-
-        const message = formatAnalysisMessage(targetRepo);
-        const keyboard = createAnalysisKeyboard(targetRepo);
-        const msg = await ctx.reply(message, {
-          parse_mode: 'Markdown',
-          reply_markup: keyboard,
-        });
-        await stateManager.setMessageRepo(msg.message_id, targetRepo.owner, targetRepo.name);
-      } catch (error) {
-        await ctx.reply(`❌ Check failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      }
-      return;
-    } else {
-      await ctx.reply(`What repo are you done with? Reply to the analysis message or use /repo <name>`);
-      return;
-    }
-  }
-
-  // "kill" / "dead" - mark as dead
-  if (['kill', 'kill it', 'dead', 'delete'].some(w => lower === w || lower.startsWith(w + ' '))) {
-    if (targetRepo) {
-      await stateManager.updateRepoState(targetRepo.owner, targetRepo.name, 'dead');
-      await ctx.reply(`☠️ **${targetRepo.name}** killed. Off your plate.`);
-      return;
-    }
-  }
-
-  // "ship" / "shipped" / "posted" - mark as shipped
-  if (['ship', 'shipped', 'posted', 'launched'].some(w => lower === w || lower.startsWith(w + ' '))) {
-    if (targetRepo) {
-      await stateManager.updateRepoState(targetRepo.owner, targetRepo.name, 'shipped');
-      await ctx.reply(`🚀 **${targetRepo.name}** shipped! Nice work.\n\nHow'd it go? Any feedback?`);
-      return;
-    }
-  }
-
-  // Post-launch feedback pattern: "got X likes" or "people want Y"
-  const tractionMatch = userMessage.match(/(\d+)\s*(likes?|stars?|users?|signups?)/i);
-  const featureMatch = userMessage.match(/(?:people|they|users?)\s+(?:want|asking for|need)\s+(.+)/i);
-
-  if (targetRepo && (tractionMatch || featureMatch)) {
-    let response = `📊 **${targetRepo.name}** feedback noted.\n\n`;
-
-    if (tractionMatch) {
-      response += `**Traction:** ${tractionMatch[1]} ${tractionMatch[2]} - solid signal!\n`;
-    }
-
-    if (featureMatch) {
-      const feature = featureMatch[1].trim();
-      response += `**Feature request:** ${feature}\n\nWant a Cursor prompt to add this?`;
-    }
-
-    await ctx.reply(response);
+  // Repo name lookup
+  const allRepos = await stateManager.getAllTrackedRepos();
+  const matched = allRepos.find(r => r.name.toLowerCase() === lower || r.name.toLowerCase().replace(/-/g, '') === lower.replace(/-/g, ''));
+  if (matched) {
+    const msg = await ctx.reply(formatAnalysis(matched), { parse_mode: 'Markdown', reply_markup: analysisKeyboard(matched) });
+    await stateManager.setMessageRepo(msg.message_id, matched.owner, matched.name);
     return;
   }
 
-  // Default: help message
-  if (!targetRepo) {
-    await ctx.reply(
-      `Not sure which repo you're talking about.\n\nReply to an analysis message, or use:\n- /scan - Analyze recent repos\n- /status - See repo counts\n- /repo <name> - Analyze specific repo`
-    );
+  // "done" / "pushed"
+  if (['done', 'pushed', 'fixed', 'finished'].some(w => lower.includes(w))) {
+    if (targetRepo?.pending_action) {
+      await reanalyzeRepo(ctx, targetRepo, getAnalyzer(), 'Checking', { clearPending: true });
+    } else {
+      await ctx.reply(`What repo are you done with? Reply to the analysis message or type the repo name.`);
+    }
+    return;
   }
+
+  // "kill"
+  if (['kill', 'kill it', 'dead', 'delete'].some(w => lower === w || lower.startsWith(w + ' '))) {
+    if (targetRepo) {
+      await stateManager.updateRepoState(targetRepo.owner, targetRepo.name, 'dead');
+      await ctx.reply(`☠️ **${targetRepo.name}** killed.`, { parse_mode: 'Markdown', reply_markup: nextActionsKeyboard() });
+    }
+    return;
+  }
+
+  // "ship" / "shipped"
+  if (['ship', 'shipped', 'posted', 'launched'].some(w => lower === w || lower.startsWith(w + ' '))) {
+    if (targetRepo) {
+      await stateManager.updateRepoState(targetRepo.owner, targetRepo.name, 'shipped');
+      await ctx.reply(`🚀 **${targetRepo.name}** shipped!`, { parse_mode: 'Markdown', reply_markup: nextActionsKeyboard() });
+    }
+    return;
+  }
+
+  // Traction/feedback
+  if (targetRepo) {
+    const traction = text.match(/(\d+)\s*(likes?|stars?|users?|signups?)/i);
+    const feature = text.match(/(?:people|they|users?)\s+(?:want|asking for|need)\s+(.+)/i);
+    if (traction || feature) {
+      let msg = `📊 **${targetRepo.name}** feedback noted.\n\n`;
+      if (traction) msg += `**Traction:** ${traction[1]} ${traction[2]} — solid signal!\n`;
+      if (feature) msg += `**Feature request:** ${feature[1].trim()}\n\nWant a Cursor prompt to add this?`;
+      await ctx.reply(msg, { parse_mode: 'Markdown' });
+      return;
+    }
+  }
+
+  await ctx.reply(`Didn't catch that. Type a repo name for details, or:`, {
+    reply_markup: new InlineKeyboard().text('🔍 Scan', 'quickscan').text('📋 Status', 'showstatus'),
+  });
 });
 
-// ============ HELPER FUNCTIONS ============
-
-function verdictToState(verdict: string): RepoState {
-  switch (verdict) {
-    case 'ship': return 'ready';
-    case 'cut_to_core': return 'has_core';
-    case 'no_core': return 'no_core';
-    case 'dead': return 'dead';
-    default: return 'no_core';
-  }
-}
-
-// ============ WEBHOOK HANDLER ============
+// ============ WEBHOOK ============
 
 export default async function handler(req: Request) {
-  if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
-  }
+  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
 
   try {
     const update = await req.json() as Update;
-
-    const debugInfo = {
-      updateType: update.message ? 'message' : update.callback_query ? 'callback' : 'other',
-      fromId: update.message?.from?.id || update.callback_query?.from?.id,
-      expectedChatId: chatId,
-      text: update.message?.text?.substring(0, 50) || update.callback_query?.data,
-    };
-    console.log('Telegram update:', JSON.stringify(debugInfo));
-
+    console.log('Update:', JSON.stringify({
+      type: update.message ? 'msg' : update.callback_query ? 'cb' : '?',
+      from: update.message?.from?.id || update.callback_query?.from?.id,
+      data: (update.message?.text || update.callback_query?.data || '').substring(0, 50),
+    }));
     await bot.handleUpdate(update);
-
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } });
   } catch (error) {
-    console.error('Telegram webhook error:', error);
-    return new Response(JSON.stringify({ error: String(error) }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    console.error('Webhook error:', error);
+    return new Response(JSON.stringify({ error: String(error) }), { status: 500, headers: { 'Content-Type': 'application/json' } });
   }
 }
