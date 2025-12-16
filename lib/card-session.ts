@@ -78,3 +78,4 @@ export async function replaceCardSession(
   // Create new session with fresh ID
   return createCardSession(newCard);
 }
+
