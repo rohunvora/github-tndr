@@ -19,7 +19,7 @@ import {
   GroupedRepos, CategoryKey, ScanVerdictCounts,
 } from '../lib/bot/format.js';
 import {
-  summaryKeyboard, categoryKeyboard,
+  summaryKeyboard, categoryKeyboard, analysisKeyboard,
   cardKeyboard, afterDoItKeyboard, deepDiveKeyboard, noMoreCardsKeyboard,
   shipConfirmKeyboard, cardErrorKeyboard,
 } from '../lib/bot/keyboards.js';
@@ -563,6 +563,46 @@ bot.on('callback_query:data', async (ctx) => {
   const name = parts[2];
   const repo = await stateManager.getTrackedRepo(owner, name);
 
+  // Handle reanalyze specially - it can work on repos not yet tracked
+  if (action === 'reanalyze') {
+    if (repo) {
+      // Existing repo - reanalyze it
+      await reanalyzeRepo(ctx, repo, getAnalyzer(), 'Re-analyzing', { clearPending: true });
+    } else {
+      // New repo - analyze it for the first time (like /repo command)
+      await ctx.api.sendChatAction(ctx.chat!.id, 'typing');
+      await ctx.reply(`⏳ Analyzing ${name} for the first time...`);
+      try {
+        const analysis = await getAnalyzer().analyzeRepo(owner, name);
+        const tracked: TrackedRepo = {
+          id: `${owner}/${name}`,
+          name,
+          owner,
+          state: verdictToState(analysis.verdict),
+          analysis,
+          analyzed_at: new Date().toISOString(),
+          pending_action: null,
+          pending_since: null,
+          last_message_id: null,
+          last_push_at: new Date().toISOString(),
+          killed_at: null,
+          shipped_at: null,
+          cover_image_url: null,
+          homepage: null,
+        };
+        await stateManager.saveTrackedRepo(tracked);
+        const msg = await ctx.reply(formatCard(tracked), {
+          parse_mode: 'Markdown',
+          reply_markup: analysisKeyboard(tracked),
+        });
+        await stateManager.setMessageRepo(msg.message_id, owner, name);
+      } catch (error) {
+        await ctx.reply(`❌ Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+    return;
+  }
+
   if (!repo && action !== 'retryname') {
     await ctx.reply('Repo not found. Try /scan.');
     return;
@@ -594,10 +634,6 @@ bot.on('callback_query:data', async (ctx) => {
         parse_mode: 'Markdown',
         reply_markup: new InlineKeyboard().text('✅ Done', `reanalyze:${owner}:${name}`),
       });
-      break;
-
-    case 'reanalyze':
-      await reanalyzeRepo(ctx, repo!, getAnalyzer(), 'Re-analyzing', { clearPending: true });
       break;
 
     case 'retry':
