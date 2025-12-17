@@ -199,26 +199,42 @@ bot.command('status', async (ctx) => {
 
 bot.command('repo', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
-  const repoName = (ctx.message?.text || '').replace('/repo', '').trim();
-  if (!repoName) { await ctx.reply('Usage: /repo <name>'); return; }
+  const repoInput = (ctx.message?.text || '').replace('/repo', '').trim();
+  if (!repoInput) { await ctx.reply('Usage: /repo <name> or /repo <owner/name>'); return; }
 
-  await ctx.reply(`⏳ Analyzing ${repoName}...`);
+  await ctx.reply(`⏳ Analyzing ${repoInput}...`);
   await showTyping(ctx);
 
   try {
-    const allRepos = await getGitHub().getUserRepos();
-    const repo = allRepos.find(r => r.name.toLowerCase() === repoName.toLowerCase());
-    if (!repo) { await ctx.reply(`❌ Repo "${repoName}" not found.`); return; }
-
-    const [owner, name] = repo.full_name.split('/');
+    let owner: string;
+    let name: string;
+    
+    // Check if it's a full path (owner/repo) or just repo name
+    if (repoInput.includes('/')) {
+      // External repo or full path format
+      [owner, name] = repoInput.split('/');
+    } else {
+      // Search in user's repos by name
+      const allRepos = await getGitHub().getUserRepos();
+      const repo = allRepos.find(r => r.name.toLowerCase() === repoInput.toLowerCase());
+      if (!repo) { 
+        await ctx.reply(`❌ Repo "${repoInput}" not found in your repos.\n\nFor external repos, use: /repo owner/name`); 
+        return; 
+      }
+      [owner, name] = repo.full_name.split('/');
+    }
+    
     const analysis = await getAnalyzer().analyzeRepo(owner, name);
+    
+    // Get repo info for pushed_at timestamp
+    const repoInfo = await getGitHub().getRepoInfo(owner, name);
 
     const tracked: TrackedRepo = {
       id: `${owner}/${name}`, name, owner,
       state: verdictToState(analysis.verdict),
       analysis, analyzed_at: new Date().toISOString(),
       pending_action: null, pending_since: null, last_message_id: null,
-      last_push_at: repo.pushed_at, killed_at: null, shipped_at: null,
+      last_push_at: repoInfo?.pushed_at || null, killed_at: null, shipped_at: null,
       cover_image_url: null,
     };
     await stateManager.saveTrackedRepo(tracked);
