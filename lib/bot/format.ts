@@ -127,6 +127,13 @@ ${counts.analyzing > 0 ? `\`⏳ Analyzing\` ${counts.analyzing}\n` : ''}
 **Total:** ${counts.total}`;
 }
 
+const prideEmoji: Record<string, string> = {
+  proud: '🟢',
+  comfortable: '🟡',
+  neutral: '😐',
+  embarrassed: '🔴',
+};
+
 export function formatAnalysis(repo: TrackedRepo, seq?: number, total?: number): string {
   const analysis = repo.analysis;
   if (!analysis) return `━━━ ${repo.name} ━━━\nAnalysis failed.`;
@@ -136,22 +143,58 @@ export function formatAnalysis(repo: TrackedRepo, seq?: number, total?: number):
   msg += `${stateEmoji(repo.state)} ${analysis.one_liner}\n\n`;
   msg += `${analysis.what_it_does}\n\n`;
 
+  // Core with evidence
   if (analysis.has_core && analysis.core_value) {
-    msg += `**Core:** ${analysis.core_value}\n`;
-    if (analysis.why_core) msg += `**Why:** ${analysis.why_core}\n`;
+    msg += `**CORE:** ${analysis.core_value}\n`;
+    
+    // Show evidence anchors
+    if (analysis.core_evidence && analysis.core_evidence.length > 0) {
+      analysis.core_evidence.slice(0, 3).forEach(ev => {
+        const symbols = ev.symbols.slice(0, 2).join(', ');
+        msg += `├─ \`${ev.file}\` → ${symbols}\n`;
+      });
+    }
   }
 
+  // README mismatch warning with proof
+  if (analysis.mismatch_evidence && analysis.mismatch_evidence.length > 0) {
+    msg += `\n⚠️ **README MISMATCH**\n`;
+    const mismatch = analysis.mismatch_evidence[0];
+    msg += `README: "${mismatch.readme_section}"\n`;
+    msg += `CODE: ${mismatch.code_anchor}\n`;
+    msg += `└─ ${mismatch.conflict}\n`;
+  }
+
+  // Cut list
   if (analysis.cut.length > 0) {
     msg += `\n**Cut:** ${analysis.cut.slice(0, 5).join(', ')}`;
     if (analysis.cut.length > 5) msg += ` (+${analysis.cut.length - 5} more)`;
     msg += '\n';
   }
 
+  // Verdict
   msg += `\n**Verdict:** ${analysis.verdict}\n`;
   msg += `_${analysis.verdict_reason}_\n`;
 
+  // Pride level with blockers
+  const pride = analysis.pride_level || 'neutral';
+  msg += `\n**Pride:** ${prideEmoji[pride] || '😐'} ${pride.charAt(0).toUpperCase() + pride.slice(1)}\n`;
+  
+  if (analysis.pride_blockers && analysis.pride_blockers.length > 0) {
+    msg += `**Blockers:**\n`;
+    analysis.pride_blockers.slice(0, 3).forEach(blocker => {
+      msg += `• ${blocker}\n`;
+    });
+  }
+
+  // Tweet only if proud, otherwise show shareable angle
   if (analysis.tweet_draft) {
     msg += `\n**Tweet:**\n\`\`\`\n${analysis.tweet_draft}\n\`\`\``;
+  } else if (analysis.shareable_angle) {
+    msg += `\n**Shareable later:** _"${analysis.shareable_angle}"_\n`;
+    if (analysis.pride_blockers && analysis.pride_blockers.length > 0) {
+      msg += `(needs: ${analysis.pride_blockers.slice(0, 2).join(', ')})\n`;
+    }
   }
 
   return msg;

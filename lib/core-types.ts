@@ -166,18 +166,83 @@ export const WhatChangedOutputSchema = z.object({
   matches_expected: z.enum(['yes', 'no', 'unknown']),
 });
 
+// ============ EVIDENCE TYPES (for grounded analysis) ============
+
+export interface CoreEvidence {
+  file: string;
+  symbols: string[];
+  reason: string;
+}
+
+export interface MismatchEvidence {
+  readme_section: string;
+  code_anchor: string;  // file:symbol format
+  conflict: string;
+}
+
+export interface ReadmeClaim {
+  claim: string;
+  support: 'supported' | 'partial' | 'unsupported' | 'unknown';
+  evidence: string[];  // file:symbol references
+}
+
+export type PrideLevel = 'proud' | 'comfortable' | 'neutral' | 'embarrassed';
+export type DemoArtifact = 'screenshot' | 'gif' | 'cli_output' | 'metric' | 'api_example' | null;
+
+// Zod schemas for evidence types
+export const CoreEvidenceSchema = z.object({
+  file: z.string(),
+  symbols: z.array(z.string()),
+  reason: z.string(),
+});
+
+export const MismatchEvidenceSchema = z.object({
+  readme_section: z.string(),
+  code_anchor: z.string(),
+  conflict: z.string(),
+});
+
+export const ReadmeClaimSchema = z.object({
+  claim: z.string(),
+  support: z.enum(['supported', 'partial', 'unsupported', 'unknown']),
+  evidence: z.array(z.string()),
+});
+
 // ============ CORE ANALYSIS (LLM Output) ============
 
 export const CoreAnalysisSchema = z.object({
+  // Basic identification
   one_liner: z.string().max(140),
   what_it_does: z.string(),
+  
+  // Core determination
   has_core: z.boolean(),
   core_value: z.string().nullable(),
   why_core: z.string().nullable(),
+  
+  // Evidence-anchored fields (NEW)
+  core_evidence: z.array(CoreEvidenceSchema),  // Must have at least 2 entries when has_core=true
+  readme_claims: z.array(ReadmeClaimSchema),
+  mismatch_evidence: z.array(MismatchEvidenceSchema),  // Empty if no mismatch
+  
+  // Keep/cut lists
   keep: z.array(z.string()),
   cut: z.array(z.string()),
+  
+  // Verdict
   verdict: z.enum(['ship', 'cut_to_core', 'no_core', 'dead']),
   verdict_reason: z.string(),
+  
+  // Demo/shareability (NEW)
+  demo_command: z.string().nullable(),
+  demo_artifact: z.enum(['screenshot', 'gif', 'cli_output', 'metric', 'api_example']).nullable(),
+  shareable_angle: z.string().nullable(),  // What would make this tweetable
+  
+  // Objective pride (NEW)
+  pride_level: z.enum(['proud', 'comfortable', 'neutral', 'embarrassed']),
+  pride_blockers: z.array(z.string()),  // Specific items from rubric that failed
+  
+  // Tweet only if proud (CHANGED)
   tweet_draft: z.string().max(280).nullable(),
 });
 
@@ -221,9 +286,41 @@ export function validateAnalysis(analysis: CoreAnalysis, fileTree: string[]): { 
     errors.push('Ship verdict requires has_core and core_value');
   }
 
+  // Check evidence requirements (NEW)
+  if (analysis.has_core && analysis.core_evidence.length < 2) {
+    errors.push(`Core claims require at least 2 evidence entries, got ${analysis.core_evidence.length}`);
+  }
+  
+  // Verify evidence has valid file references
+  for (const evidence of analysis.core_evidence) {
+    if (!evidence.file || evidence.symbols.length === 0) {
+      errors.push(`Evidence entry missing file or symbols: ${JSON.stringify(evidence)}`);
+    }
+  }
+  
+  // Verify mismatch evidence has both sides
+  for (const mismatch of analysis.mismatch_evidence) {
+    if (!mismatch.readme_section || !mismatch.code_anchor) {
+      errors.push(`Mismatch evidence missing readme_section or code_anchor: ${JSON.stringify(mismatch)}`);
+    }
+  }
+
+  // Check tweet is only present when proud (NEW)
+  if (analysis.tweet_draft && analysis.pride_level !== 'proud') {
+    errors.push(`Tweet draft present but pride_level is ${analysis.pride_level}, not 'proud'`);
+  }
+
   // Check tweet length
   if (analysis.tweet_draft && analysis.tweet_draft.length > 280) {
     errors.push(`Tweet too long: ${analysis.tweet_draft.length} chars`);
+  }
+  
+  // Check pride_blockers consistency (NEW)
+  if (analysis.pride_level === 'proud' && analysis.pride_blockers.length > 0) {
+    errors.push(`Pride level is 'proud' but blockers exist: ${analysis.pride_blockers.join(', ')}`);
+  }
+  if (analysis.pride_level !== 'proud' && analysis.pride_blockers.length === 0) {
+    errors.push(`Pride level is '${analysis.pride_level}' but no blockers specified`);
   }
 
   return { valid: errors.length === 0, errors };
