@@ -202,8 +202,23 @@ bot.command('repo', async (ctx) => {
   const repoInput = (ctx.message?.text || '').replace('/repo', '').trim();
   if (!repoInput) { await ctx.reply('Usage: /repo <name> or /repo <owner/name>'); return; }
 
-  await ctx.reply(`⏳ Analyzing ${repoInput}...`);
-  await showTyping(ctx);
+  // Check if already analyzing this repo (prevent webhook retry duplicates)
+  const analysisKey = `analyzing:${repoInput.toLowerCase()}`;
+  const existingAnalysis = await stateManager.get(analysisKey);
+  if (existingAnalysis) {
+    return; // Silently ignore duplicate - already in progress
+  }
+  await stateManager.set(analysisKey, Date.now().toString(), 120); // 2 min TTL
+
+  // Single progress message that we'll edit
+  const progressMsg = await ctx.reply(`⏳ **${repoInput}**\n\n_Resolving repo..._`, { parse_mode: 'Markdown' });
+  
+  const updateProgress = async (step: string) => {
+    try {
+      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, 
+        `⏳ **${repoInput}**\n\n_${step}_`, { parse_mode: 'Markdown' });
+    } catch { /* ignore edit errors */ }
+  };
 
   try {
     let owner: string;
@@ -211,43 +226,61 @@ bot.command('repo', async (ctx) => {
     
     // Check if it's a full path (owner/repo) or just repo name
     if (repoInput.includes('/')) {
-      // External repo or full path format
       [owner, name] = repoInput.split('/');
+      await updateProgress('Fetching repo info...');
     } else {
-      // Search in user's repos by name
+      await updateProgress('Searching your repos...');
       const allRepos = await getGitHub().getUserRepos();
       const repo = allRepos.find(r => r.name.toLowerCase() === repoInput.toLowerCase());
       if (!repo) { 
-        await ctx.reply(`❌ Repo "${repoInput}" not found in your repos.\n\nFor external repos, use: /repo owner/name`); 
+        await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
+          `❌ Repo "${repoInput}" not found in your repos.\n\nFor external repos, use: /repo owner/name`);
+        await stateManager.delete(analysisKey);
         return; 
       }
       [owner, name] = repo.full_name.split('/');
     }
     
-    const analysis = await getAnalyzer().analyzeRepo(owner, name);
+    await updateProgress('Fetching README & file tree...');
     
-    // Get repo info for pushed_at timestamp
+    // Get repo info first to validate it exists
     const repoInfo = await getGitHub().getRepoInfo(owner, name);
+    if (!repoInfo) {
+      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
+        `❌ Repo "${owner}/${name}" not found or not accessible.`);
+      await stateManager.delete(analysisKey);
+      return;
+    }
+    
+    await updateProgress('Analyzing with AI (evidence-anchored)...');
+    const analysis = await getAnalyzer().analyzeRepo(owner, name);
 
+    await updateProgress('Saving results...');
     const tracked: TrackedRepo = {
       id: `${owner}/${name}`, name, owner,
       state: verdictToState(analysis.verdict),
       analysis, analyzed_at: new Date().toISOString(),
       pending_action: null, pending_since: null, last_message_id: null,
-      last_push_at: repoInfo?.pushed_at || null, killed_at: null, shipped_at: null,
+      last_push_at: repoInfo.pushed_at || null, killed_at: null, shipped_at: null,
       cover_image_url: null,
     };
     await stateManager.saveTrackedRepo(tracked);
 
+    // Delete progress message, send final result
+    await ctx.api.deleteMessage(ctx.chat!.id, progressMsg.message_id);
     const msg = await ctx.reply(formatAnalysis(tracked), {
       parse_mode: 'Markdown', reply_markup: analysisKeyboard(tracked),
     });
     await stateManager.setMessageRepo(msg.message_id, owner, name);
     await stateManager.updateRepoMessageId(owner, name, msg.message_id);
+    
   } catch (error) {
-    await ctx.reply(`❌ Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`, {
-      reply_markup: new InlineKeyboard().text('🔄 Retry', `retryname:${repoName}`),
+    await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
+      `❌ Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`, {
+      reply_markup: new InlineKeyboard().text('🔄 Retry', `retryname:${repoInput}`),
     });
+  } finally {
+    await stateManager.delete(analysisKey);
   }
 });
 

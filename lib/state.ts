@@ -129,6 +129,24 @@ export class StateManager {
       analyzing: all.filter(r => r.state === 'analyzing').length,
     };
   }
+
+  // ============ GENERIC KEY-VALUE (for locks, flags, etc.) ============
+
+  async get(key: string): Promise<string | null> {
+    return kv.get<string>(key);
+  }
+
+  async set(key: string, value: string, ttlSeconds?: number): Promise<void> {
+    if (ttlSeconds) {
+      await kv.set(key, value, { ex: ttlSeconds });
+    } else {
+      await kv.set(key, value);
+    }
+  }
+
+  async delete(key: string): Promise<void> {
+    await kv.del(key);
+  }
 }
 
 export const stateManager = new StateManager();
