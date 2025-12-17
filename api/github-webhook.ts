@@ -1,6 +1,5 @@
 export const config = { runtime: 'edge', maxDuration: 30 };
 
-import crypto from 'crypto';
 import { info, error as logErr } from '../lib/logger.js';
 import { stateManager } from '../lib/state.js';
 import { analyzePush, PushAnalysisResult } from '../lib/push-analyzer.js';
@@ -32,9 +31,9 @@ interface PushEvent {
 }
 
 /**
- * Verify GitHub webhook signature
+ * Verify GitHub webhook signature using Web Crypto API (Edge-compatible)
  */
-function verifySignature(payload: string, signature: string | null): boolean {
+async function verifySignature(payload: string, signature: string | null): Promise<boolean> {
   if (!GITHUB_WEBHOOK_SECRET) {
     info('webhook', 'No secret configured, skipping verification');
     return true;
@@ -43,10 +42,32 @@ function verifySignature(payload: string, signature: string | null): boolean {
   if (!signature) return false;
   
   const sig = signature.replace('sha256=', '');
-  const hmac = crypto.createHmac('sha256', GITHUB_WEBHOOK_SECRET);
-  const digest = hmac.update(payload).digest('hex');
   
-  return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(digest));
+  // Import the secret key for HMAC
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(GITHUB_WEBHOOK_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  
+  // Sign the payload
+  const signatureBytes = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  
+  // Convert to hex string
+  const digest = Array.from(new Uint8Array(signatureBytes))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  
+  // Timing-safe comparison
+  if (sig.length !== digest.length) return false;
+  let result = 0;
+  for (let i = 0; i < sig.length; i++) {
+    result |= sig.charCodeAt(i) ^ digest.charCodeAt(i);
+  }
+  return result === 0;
 }
 
 /**
@@ -139,7 +160,7 @@ export default async function handler(req: Request) {
   const payload = await req.text();
   
   // Verify signature
-  if (!verifySignature(payload, signature)) {
+  if (!await verifySignature(payload, signature)) {
     info('webhook', 'Invalid signature');
     return new Response('Invalid signature', { status: 401 });
   }
