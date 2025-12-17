@@ -206,17 +206,27 @@ bot.command('repo', async (ctx) => {
   const analysisKey = `analyzing:${repoInput.toLowerCase()}`;
   const existingAnalysis = await stateManager.get(analysisKey);
   if (existingAnalysis) {
-    return; // Silently ignore duplicate - already in progress
+    // Check if stale (> 90 seconds old) and clear it
+    const lockTime = parseInt(existingAnalysis);
+    if (Date.now() - lockTime > 90000) {
+      await stateManager.delete(analysisKey);
+    } else {
+      return; // Still processing
+    }
   }
-  await stateManager.set(analysisKey, Date.now().toString(), 120); // 2 min TTL
+  await stateManager.set(analysisKey, Date.now().toString(), 120);
 
-  // Single progress message that we'll edit
-  const progressMsg = await ctx.reply(`⏳ **${repoInput}**\n\n_Resolving repo..._`, { parse_mode: 'Markdown' });
+  const startTime = Date.now();
+  const elapsed = () => `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
   
-  const updateProgress = async (step: string) => {
+  // Single progress message - Cursor-style with elapsed time
+  const progressMsg = await ctx.reply(`🔍 **Analyzing ${repoInput}**\n\n⏱ 0.0s\n\n\`resolving repo...\``, { parse_mode: 'Markdown' });
+  
+  const updateProgress = async (step: string, detail?: string) => {
     try {
-      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, 
-        `⏳ **${repoInput}**\n\n_${step}_`, { parse_mode: 'Markdown' });
+      let msg = `🔍 **Analyzing ${repoInput}**\n\n⏱ ${elapsed()}\n\n\`${step}\``;
+      if (detail) msg += `\n_${detail}_`;
+      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, msg, { parse_mode: 'Markdown' });
     } catch { /* ignore edit errors */ }
   };
 
@@ -224,12 +234,10 @@ bot.command('repo', async (ctx) => {
     let owner: string;
     let name: string;
     
-    // Check if it's a full path (owner/repo) or just repo name
     if (repoInput.includes('/')) {
       [owner, name] = repoInput.split('/');
-      await updateProgress('Fetching repo info...');
     } else {
-      await updateProgress('Searching your repos...');
+      await updateProgress('searching your repos...');
       const allRepos = await getGitHub().getUserRepos();
       const repo = allRepos.find(r => r.name.toLowerCase() === repoInput.toLowerCase());
       if (!repo) { 
@@ -241,9 +249,7 @@ bot.command('repo', async (ctx) => {
       [owner, name] = repo.full_name.split('/');
     }
     
-    await updateProgress('Fetching README & file tree...');
-    
-    // Get repo info first to validate it exists
+    await updateProgress('fetching repo metadata...', `github.com/${owner}/${name}`);
     const repoInfo = await getGitHub().getRepoInfo(owner, name);
     if (!repoInfo) {
       await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
@@ -252,10 +258,16 @@ bot.command('repo', async (ctx) => {
       return;
     }
     
-    await updateProgress('Analyzing with AI (evidence-anchored)...');
+    await updateProgress('reading README.md...');
+    await updateProgress('fetching file tree...');
+    await updateProgress('checking commit history...');
+    await updateProgress('asking Claude to analyze...', 'examining code evidence');
+    
     const analysis = await getAnalyzer().analyzeRepo(owner, name);
 
-    await updateProgress('Saving results...');
+    await updateProgress('validating evidence anchors...');
+    await updateProgress('saving to database...');
+    
     const tracked: TrackedRepo = {
       id: `${owner}/${name}`, name, owner,
       state: verdictToState(analysis.verdict),
@@ -266,7 +278,7 @@ bot.command('repo', async (ctx) => {
     };
     await stateManager.saveTrackedRepo(tracked);
 
-    // Delete progress message, send final result
+    // Replace progress with final result
     await ctx.api.deleteMessage(ctx.chat!.id, progressMsg.message_id);
     const msg = await ctx.reply(formatAnalysis(tracked), {
       parse_mode: 'Markdown', reply_markup: analysisKeyboard(tracked),
@@ -275,8 +287,10 @@ bot.command('repo', async (ctx) => {
     await stateManager.updateRepoMessageId(owner, name, msg.message_id);
     
   } catch (error) {
+    const errMsg = error instanceof Error ? error.message : 'Unknown error';
     await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
-      `❌ Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`, {
+      `❌ **Analysis failed** (${elapsed()})\n\n\`${errMsg.substring(0, 200)}\``, {
+      parse_mode: 'Markdown',
       reply_markup: new InlineKeyboard().text('🔄 Retry', `retryname:${repoInput}`),
     });
   } finally {

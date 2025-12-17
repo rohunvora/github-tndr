@@ -220,10 +220,10 @@ export const CoreAnalysisSchema = z.object({
   core_value: z.string().nullable(),
   why_core: z.string().nullable(),
   
-  // Evidence-anchored fields (NEW)
-  core_evidence: z.array(CoreEvidenceSchema),  // Must have at least 2 entries when has_core=true
-  readme_claims: z.array(ReadmeClaimSchema),
-  mismatch_evidence: z.array(MismatchEvidenceSchema),  // Empty if no mismatch
+  // Evidence-anchored fields (optional with defaults for backwards compat)
+  core_evidence: z.array(CoreEvidenceSchema).optional().default([]),
+  readme_claims: z.array(ReadmeClaimSchema).optional().default([]),
+  mismatch_evidence: z.array(MismatchEvidenceSchema).optional().default([]),
   
   // Keep/cut lists
   keep: z.array(z.string()),
@@ -233,16 +233,16 @@ export const CoreAnalysisSchema = z.object({
   verdict: z.enum(['ship', 'cut_to_core', 'no_core', 'dead']),
   verdict_reason: z.string(),
   
-  // Demo/shareability (NEW)
-  demo_command: z.string().nullable(),
-  demo_artifact: z.enum(['screenshot', 'gif', 'cli_output', 'metric', 'api_example']).nullable(),
-  shareable_angle: z.string().nullable(),  // What would make this tweetable
+  // Demo/shareability (optional with defaults)
+  demo_command: z.string().nullable().optional().default(null),
+  demo_artifact: z.enum(['screenshot', 'gif', 'cli_output', 'metric', 'api_example']).nullable().optional().default(null),
+  shareable_angle: z.string().nullable().optional().default(null),
   
-  // Objective pride (NEW)
-  pride_level: z.enum(['proud', 'comfortable', 'neutral', 'embarrassed']),
-  pride_blockers: z.array(z.string()),  // Specific items from rubric that failed
+  // Objective pride (optional with defaults)
+  pride_level: z.enum(['proud', 'comfortable', 'neutral', 'embarrassed']).optional().default('neutral'),
+  pride_blockers: z.array(z.string()).optional().default([]),
   
-  // Tweet only if proud (CHANGED)
+  // Tweet only if proud
   tweet_draft: z.string().max(280).nullable(),
 });
 
