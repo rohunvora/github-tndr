@@ -259,8 +259,8 @@ async function runScan(ctx: Context, days: number): Promise<void> {
       else if (repo.analysis?.verdict === 'dead') verdicts.dead++;
     };
 
-    const updateProgress = async () => {
-      if (Date.now() - lastUpdate < 800) return; // Rate limit: 800ms
+    const updateProgress = async (force = false) => {
+      if (!force && Date.now() - lastUpdate < 500) return; // Rate limit: 500ms
       lastUpdate = Date.now();
       try {
         await ctx.api.editMessageText(
@@ -294,6 +294,10 @@ async function runScan(ctx: Context, days: number): Promise<void> {
       await Promise.all(repos.slice(i, i + 5).map(async (repo) => {
         const [owner, name] = repo.full_name.split('/');
         currentRepo = name;
+
+        // Show which repo we're working on BEFORE the slow operations
+        await updateProgress();
+
         try {
           let tracked = await stateManager.getTrackedRepo(owner, name);
 
@@ -317,7 +321,7 @@ async function runScan(ctx: Context, days: number): Promise<void> {
             return;
           }
 
-          // Analyze
+          // Analyze (this is the slow Claude API call)
           const analysis = await getAnalyzer().analyzeRepo(owner, name);
           tracked = {
             id: `${owner}/${name}`, name, owner,
