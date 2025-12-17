@@ -239,6 +239,7 @@ async function generateAI(result: SummaryResult): Promise<Buffer> {
     killed_at: null,
     shipped_at: null,
     cover_image_url: null,
+    homepage: null,
   };
   
   return generateRepoCover(repo);

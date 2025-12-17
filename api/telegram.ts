@@ -1,6 +1,7 @@
 export const config = { runtime: 'edge', maxDuration: 60 };
 
 import { Bot, InlineKeyboard, Context, InputFile } from 'grammy';
+import { kv } from '@vercel/kv';
 import type { Update, UserFromGetMe } from 'grammy/types';
 import Anthropic from '@anthropic-ai/sdk';
 import { info, error as logErr } from '../lib/logger.js';
@@ -14,18 +15,19 @@ import {
   formatProgress, formatScanSummary, formatCategoryView, formatStatus, formatCard, formatDetails,
   formatCursorPrompt, formatRepoCard, formatNoMoreCards, formatCompletion,
   formatShipConfirm, formatShipped, formatRepoCardWithArtifact,
-  GroupedRepos, CategoryKey,
+  formatCardProgress, formatCardError, formatScanProgressV2, formatScanTimeout,
+  GroupedRepos, CategoryKey, ScanVerdictCounts,
 } from '../lib/bot/format.js';
 import {
   summaryKeyboard, categoryKeyboard,
   cardKeyboard, afterDoItKeyboard, deepDiveKeyboard, noMoreCardsKeyboard,
-  shipConfirmKeyboard,
+  shipConfirmKeyboard, cardErrorKeyboard,
 } from '../lib/bot/keyboards.js';
 import { createCardSession, getCardSession, updateCardSession } from '../lib/card-session.js';
 import { verdictToState, reanalyzeRepo } from '../lib/bot/actions.js';
 import { generateRepoCover } from '../lib/nano-banana.js';
-import { 
-  generateCard, getNextCard, markCardShown, markCardSkipped, clearIntention,
+import {
+  generateCard, getNextCard, markCardShown, markCardSkipped, clearIntention, getFeedMemory,
 } from '../lib/card-generator.js';
 import { 
   generateCursorPromptArtifact, formatCursorPromptMessage,
@@ -103,34 +105,64 @@ bot.command('help', async (ctx) => {
 bot.command('next', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
   info('cmd', '/next', { from: ctx.from?.id });
-  await showTyping(ctx);
-  
+
+  // Send initial progress message
+  const progressMsg = await ctx.reply('🔍 Finding your next task...', { parse_mode: 'Markdown' });
+  const chatIdNum = ctx.chat!.id;
+  let lastRepoName: string | undefined;
+
   try {
     const repos = await stateManager.getAllTrackedRepos();
     if (repos.length === 0) {
-      await ctx.reply('No repos tracked. Run /scan first.', {
+      await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, 'No repos tracked. Run /scan first.', {
         reply_markup: new InlineKeyboard().text('🔍 Scan', 'quickscan'),
       });
       return;
     }
-    
-    const card = await getNextCard(getAnthropic(), getGitHub(), repos);
+
+    // Progress callback that edits the message
+    const onProgress = async (progress: { step: string; repoName?: string; stage?: string; potential?: string }) => {
+      lastRepoName = progress.repoName || lastRepoName;
+      try {
+        await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatCardProgress(progress as Parameters<typeof formatCardProgress>[0]), {
+          parse_mode: 'Markdown',
+        });
+      } catch { /* rate limit or unchanged text */ }
+    };
+
+    const card = await getNextCard(getAnthropic(), getGitHub(), repos, onProgress);
     if (!card) {
-      await ctx.reply(formatNoMoreCards(), { parse_mode: 'Markdown', reply_markup: noMoreCardsKeyboard() });
+      await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatNoMoreCards(), {
+        parse_mode: 'Markdown',
+        reply_markup: noMoreCardsKeyboard(),
+      });
       return;
     }
-    
+
     const session = await createCardSession(card);
     await markCardShown(card.full_name);
-    
-    await ctx.reply(formatRepoCard(card), {
+
+    // Final update with the card and buttons
+    await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatRepoCard(card), {
       parse_mode: 'Markdown',
       reply_markup: cardKeyboard(session.id, session.version),
       link_preview_options: card.cover_image_url ? { url: card.cover_image_url, show_above_text: true, prefer_large_media: true } : undefined,
     });
   } catch (err) {
     logErr('cmd.next', err);
-    await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Failed'}`);
+    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+    try {
+      await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatCardError(errorMsg, lastRepoName), {
+        parse_mode: 'Markdown',
+        reply_markup: cardErrorKeyboard(),
+      });
+    } catch {
+      // Fallback if edit fails
+      await ctx.reply(formatCardError(errorMsg, lastRepoName), {
+        parse_mode: 'Markdown',
+        reply_markup: cardErrorKeyboard(),
+      });
+    }
   }
 });
 
@@ -196,38 +228,64 @@ async function runScan(ctx: Context, days: number): Promise<void> {
   const startTime = Date.now();
   const TIMEOUT = 55000;
   const scanId = `scan_${Date.now()}`;
-  
+
   info('scan', 'Starting', { days, scanId });
   await stateManager.setActiveScan(scanId);
 
   try {
     const progressMsg = await ctx.reply('🔍 Fetching repos...');
     const repos = await getGitHub().getRecentRepos(days);
-    
+
     if (repos.length === 0) {
       await stateManager.cancelActiveScan();
       await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, `No repos in last ${days} days.`);
       return;
     }
 
-    await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, formatProgress(0, repos.length, 0, 0));
-    
     const analyzed: TrackedRepo[] = [];
     const errors: string[] = [];
     let cached = 0;
     let lastUpdate = 0;
+    let currentRepo: string | null = null;
+
+    // Track verdicts for progress display
+    const verdicts: ScanVerdictCounts = { ship: 0, cut: 0, no_core: 0, dead: 0, shipped: 0 };
+
+    const countVerdict = (repo: TrackedRepo) => {
+      if (repo.state === 'shipped') verdicts.shipped++;
+      else if (repo.analysis?.verdict === 'ship') verdicts.ship++;
+      else if (repo.analysis?.verdict === 'cut_to_core') verdicts.cut++;
+      else if (repo.analysis?.verdict === 'no_core') verdicts.no_core++;
+      else if (repo.analysis?.verdict === 'dead') verdicts.dead++;
+    };
 
     const updateProgress = async () => {
-      if (Date.now() - lastUpdate < 500) return;
+      if (Date.now() - lastUpdate < 800) return; // Rate limit: 800ms
       lastUpdate = Date.now();
       try {
-        await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
-          formatProgress(analyzed.length + errors.length, repos.length, cached, errors.length));
+        await ctx.api.editMessageText(
+          ctx.chat!.id,
+          progressMsg.message_id,
+          formatScanProgressV2(analyzed.length + errors.length, repos.length, currentRepo, verdicts, cached),
+          { parse_mode: 'Markdown' }
+        );
       } catch { /* rate limit */ }
     };
 
+    // Initial progress
+    await ctx.api.editMessageText(
+      ctx.chat!.id,
+      progressMsg.message_id,
+      formatScanProgressV2(0, repos.length, null, verdicts, 0),
+      { parse_mode: 'Markdown' }
+    );
+
+    let hitTimeout = false;
     for (let i = 0; i < repos.length; i += 5) {
-      if (Date.now() - startTime > TIMEOUT) break;
+      if (Date.now() - startTime > TIMEOUT) {
+        hitTimeout = true;
+        break;
+      }
       if (await stateManager.getActiveScan() !== scanId) {
         await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, '⏹️ Cancelled.');
         return;
@@ -235,12 +293,14 @@ async function runScan(ctx: Context, days: number): Promise<void> {
 
       await Promise.all(repos.slice(i, i + 5).map(async (repo) => {
         const [owner, name] = repo.full_name.split('/');
+        currentRepo = name;
         try {
           let tracked = await stateManager.getTrackedRepo(owner, name);
-          
+
           // Skip shipped/dead
           if (tracked?.state === 'shipped' || tracked?.state === 'dead') {
             cached++;
+            countVerdict(tracked);
             analyzed.push(tracked);
             await updateProgress();
             return;
@@ -251,6 +311,7 @@ async function runScan(ctx: Context, days: number): Promise<void> {
           const hasNewCommits = new Date(repo.pushed_at).getTime() > (tracked?.analyzed_at ? new Date(tracked.analyzed_at).getTime() : 0);
           if (hasAnalysis && !hasNewCommits && tracked) {
             cached++;
+            countVerdict(tracked);
             analyzed.push(tracked);
             await updateProgress();
             return;
@@ -265,8 +326,10 @@ async function runScan(ctx: Context, days: number): Promise<void> {
             pending_action: null, pending_since: null, last_message_id: null,
             last_push_at: repo.pushed_at, killed_at: null, shipped_at: null,
             cover_image_url: tracked?.cover_image_url || null,
+            homepage: repo.homepage || null,
           };
           await stateManager.saveTrackedRepo(tracked);
+          countVerdict(tracked);
           analyzed.push(tracked);
           await updateProgress();
         } catch (err) {
@@ -281,7 +344,17 @@ async function runScan(ctx: Context, days: number): Promise<void> {
       return;
     }
 
-    try { await ctx.api.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch { /* ok */ }
+    // Show timeout message if we hit the limit
+    if (hitTimeout && analyzed.length < repos.length) {
+      await ctx.api.editMessageText(
+        ctx.chat!.id,
+        progressMsg.message_id,
+        formatScanTimeout(analyzed.length, repos.length, verdicts),
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      try { await ctx.api.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch { /* ok */ }
+    }
 
     const groups: GroupedRepos = {
       ship: analyzed.filter(r => r.analysis?.verdict === 'ship'),
@@ -291,7 +364,7 @@ async function runScan(ctx: Context, days: number): Promise<void> {
       shipped: analyzed.filter(r => r.state === 'shipped'),
     };
 
-    info('scan', 'Complete', { analyzed: analyzed.length, errors: errors.length });
+    info('scan', 'Complete', { analyzed: analyzed.length, errors: errors.length, hitTimeout });
     await ctx.reply(formatScanSummary(groups), { parse_mode: 'Markdown', reply_markup: summaryKeyboard(groups) });
     await stateManager.cancelActiveScan();
 
@@ -413,25 +486,70 @@ bot.on('callback_query:data', async (ctx) => {
     return;
   }
 
-  // Legacy card actions
-  if (action === 'card_next') {
+  // Legacy card actions and retry
+  if (action === 'card_next' || action === 'card_retry') {
     await showTyping(ctx);
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    const chatIdNum = ctx.chat?.id;
+    let lastRepoName: string | undefined;
+
     try {
       const repos = await stateManager.getAllTrackedRepos();
-      const card = await getNextCard(getAnthropic(), getGitHub(), repos);
+
+      // Progress callback for streaming updates
+      const onProgress = async (progress: { step: string; repoName?: string; stage?: string; potential?: string }) => {
+        lastRepoName = progress.repoName || lastRepoName;
+        if (messageId && chatIdNum) {
+          try {
+            await ctx.api.editMessageText(chatIdNum, messageId, formatCardProgress(progress as Parameters<typeof formatCardProgress>[0]), {
+              parse_mode: 'Markdown',
+            });
+          } catch { /* rate limit */ }
+        }
+      };
+
+      const card = await getNextCard(getAnthropic(), getGitHub(), repos, onProgress);
       if (!card) {
-        await ctx.reply(formatNoMoreCards(), { parse_mode: 'Markdown', reply_markup: noMoreCardsKeyboard() });
+        if (messageId && chatIdNum) {
+          await ctx.api.editMessageText(chatIdNum, messageId, formatNoMoreCards(), {
+            parse_mode: 'Markdown',
+            reply_markup: noMoreCardsKeyboard(),
+          });
+        } else {
+          await ctx.reply(formatNoMoreCards(), { parse_mode: 'Markdown', reply_markup: noMoreCardsKeyboard() });
+        }
         return;
       }
       const session = await createCardSession(card);
       await markCardShown(card.full_name);
-      await ctx.reply(formatRepoCard(card), {
-        parse_mode: 'Markdown',
-        reply_markup: cardKeyboard(session.id, session.version),
-      });
+
+      if (messageId && chatIdNum) {
+        await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(card), {
+          parse_mode: 'Markdown',
+          reply_markup: cardKeyboard(session.id, session.version),
+          link_preview_options: card.cover_image_url ? { url: card.cover_image_url, show_above_text: true, prefer_large_media: true } : undefined,
+        });
+      } else {
+        await ctx.reply(formatRepoCard(card), {
+          parse_mode: 'Markdown',
+          reply_markup: cardKeyboard(session.id, session.version),
+        });
+      }
     } catch (err) {
       logErr('cb.card_next', err);
-      await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Failed'}`);
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      if (messageId && chatIdNum) {
+        try {
+          await ctx.api.editMessageText(chatIdNum, messageId, formatCardError(errorMsg, lastRepoName), {
+            parse_mode: 'Markdown',
+            reply_markup: cardErrorKeyboard(),
+          });
+        } catch {
+          await ctx.reply(formatCardError(errorMsg, lastRepoName), { parse_mode: 'Markdown', reply_markup: cardErrorKeyboard() });
+        }
+      } else {
+        await ctx.reply(formatCardError(errorMsg, lastRepoName), { parse_mode: 'Markdown', reply_markup: cardErrorKeyboard() });
+      }
     }
     return;
   }
@@ -502,28 +620,72 @@ bot.on('callback_query:data', async (ctx) => {
 async function handleSessionAction(ctx: Context, action: string, parts: string[]): Promise<void> {
     const sessionId = parts[1];
     const version = parseInt(parts[2], 10);
-    
-    const session = await getCardSession(sessionId);
-    if (!session) {
-    await ctx.answerCallbackQuery({ text: 'Session expired. /next' });
-      return;
-    }
-    
-    if (session.version !== version) {
-    await ctx.answerCallbackQuery({ text: 'Outdated. Card changed.' });
-      return;
-    }
-    
-  const messageId = ctx.callbackQuery?.message?.message_id;
+
+    const messageId = ctx.callbackQuery?.message?.message_id;
     const chatIdNum = ctx.chat?.id;
     if (!messageId || !chatIdNum) {
-    await ctx.answerCallbackQuery({ text: 'Error' });
+      await ctx.answerCallbackQuery({ text: 'Error' });
       return;
     }
-    
+
+    let session = await getCardSession(sessionId);
+
+    // Session recovery: if expired, try to regenerate from active_card
+    if (!session) {
+      const memory = await getFeedMemory();
+      if (memory.active_card) {
+        const [recoverOwner, recoverName] = memory.active_card.split('/');
+        const repos = await stateManager.getAllTrackedRepos();
+        const repo = repos.find(r => r.owner === recoverOwner && r.name === recoverName);
+
+        if (repo) {
+          try {
+            await ctx.api.editMessageText(chatIdNum, messageId, '🔄 Session expired — refreshing...', { parse_mode: 'Markdown' });
+            const card = await generateCard(getAnthropic(), getGitHub(), repo);
+            session = await createCardSession(card);
+            await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(card), {
+              parse_mode: 'Markdown',
+              reply_markup: cardKeyboard(session.id, session.version),
+            });
+            await ctx.answerCallbackQuery({ text: '🔄 Refreshed! Try again.' });
+            return;
+          } catch (err) {
+            logErr('session.recovery', err);
+          }
+        }
+      }
+
+      // Recovery failed - show error with retry option
+      await ctx.api.editMessageText(chatIdNum, messageId, '❌ Session expired\n\nUse /next to get a fresh card.', {
+        parse_mode: 'Markdown',
+        reply_markup: cardErrorKeyboard(),
+      });
+      await ctx.answerCallbackQuery({ text: 'Session expired' });
+      return;
+    }
+
+    if (session.version !== version) {
+      await ctx.answerCallbackQuery({ text: 'Outdated. Card changed.' });
+      return;
+    }
+
+    // Idempotency: prevent button mashing for expensive actions
+    const expensiveActions = ['do', 'dostep', 'deep', 'skip'];
+    const actionKey = `action:${sessionId}:${action}`;
+    if (expensiveActions.includes(action)) {
+      const inFlight = await kv.get(actionKey);
+      if (inFlight) {
+        await ctx.answerCallbackQuery({ text: '⏳ Already processing...' });
+        return;
+      }
+      await kv.set(actionKey, true, { ex: 60 }); // 60s TTL
+    }
+
     const card = session.card;
     const [owner, name] = card.full_name.split('/');
-    
+
+    // Wrap in try/finally to ensure we clear the action lock
+    try {
     switch (action) {
     case 'skip': {
       await markCardSkipped(card.full_name);
@@ -697,6 +859,12 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
         await ctx.answerCallbackQuery({ text: 'Failed' });
         }
         break;
+      }
+    }
+    } finally {
+      // Clear the action lock for expensive operations
+      if (expensiveActions.includes(action)) {
+        await kv.del(actionKey);
       }
     }
   }

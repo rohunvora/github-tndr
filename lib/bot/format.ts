@@ -2,6 +2,7 @@
 // Principle: Scannable > Comprehensive
 
 import { TrackedRepo, RepoState, RepoCard, ProjectStage } from '../core-types.js';
+import { CardProgress } from '../card-generator.js';
 
 // ============ TYPES ============
 
@@ -180,6 +181,84 @@ export function formatProgress(done: number, total: number, cached: number, erro
   return status;
 }
 
+export interface ScanVerdictCounts {
+  ship: number;
+  cut: number;
+  no_core: number;
+  dead: number;
+  shipped: number;
+}
+
+/**
+ * Richer scan progress showing current repo and verdict breakdown
+ */
+export function formatScanProgressV2(
+  done: number,
+  total: number,
+  currentRepo: string | null,
+  verdicts: ScanVerdictCounts,
+  cached: number
+): string {
+  const lines: string[] = [];
+
+  lines.push(`⏳ ${done}/${total} repos analyzed`);
+  if (currentRepo) {
+    lines.push(`Currently: **${currentRepo}**`);
+  }
+  lines.push('');
+
+  // Verdict breakdown (only show non-zero)
+  const parts: string[] = [];
+  if (verdicts.ship > 0) parts.push(`🟢 ${verdicts.ship} ship`);
+  if (verdicts.cut > 0) parts.push(`🟡 ${verdicts.cut} cut`);
+  if (verdicts.no_core > 0) parts.push(`🔴 ${verdicts.no_core} no core`);
+  if (verdicts.dead > 0) parts.push(`☠️ ${verdicts.dead} dead`);
+  if (verdicts.shipped > 0) parts.push(`🏆 ${verdicts.shipped} shipped`);
+
+  if (parts.length > 0) {
+    lines.push(parts.join(' | '));
+  }
+
+  if (cached > 0) {
+    lines.push(`_${cached} cached_`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Timeout/completion message with explicit skipped count
+ */
+export function formatScanTimeout(
+  analyzed: number,
+  total: number,
+  verdicts: ScanVerdictCounts
+): string {
+  const skipped = total - analyzed;
+  const lines: string[] = [];
+
+  lines.push(`⏸ Stopped at timeout limit`);
+  lines.push('');
+  lines.push(`**Analyzed:** ${analyzed}/${total} repos`);
+  if (skipped > 0) {
+    lines.push(`**Skipped:** ${skipped} repos _(run /scan again)_`);
+  }
+  lines.push('');
+
+  const parts: string[] = [];
+  if (verdicts.ship > 0) parts.push(`🟢 ${verdicts.ship}`);
+  if (verdicts.cut > 0) parts.push(`🟡 ${verdicts.cut}`);
+  if (verdicts.no_core > 0) parts.push(`🔴 ${verdicts.no_core}`);
+  if (verdicts.dead > 0) parts.push(`☠️ ${verdicts.dead}`);
+  if (verdicts.shipped > 0) parts.push(`🏆 ${verdicts.shipped}`);
+
+  if (parts.length > 0) {
+    lines.push(parts.join(' | '));
+  }
+
+  return lines.join('\n');
+}
+
 const categoryLabels: Record<CategoryKey, string> = {
   ship: '🚀 SHIP',
   cut: '✂️ CUT TO CORE',
@@ -254,6 +333,27 @@ ${counts.analyzing > 0 ? `\`⏳ Analyzing\` ${counts.analyzing}\n` : ''}
 // Legacy alias for backwards compatibility
 export const formatAnalysis = formatCard;
 
+// ============ MORNING STACK ============
+
+/**
+ * Consolidated morning stack - one message instead of 3-5
+ */
+export function formatMorningStack(cards: RepoCard[]): string {
+  const lines: string[] = [];
+
+  lines.push(`☀️ **Good morning!** Here's your stack:`);
+  lines.push('');
+
+  cards.forEach((card, i) => {
+    const num = i + 1;
+    lines.push(`${num}. **${card.repo}** — ${stageLabel(card.stage)}`);
+    lines.push(`   _Next: ${card.next_step.action}_`);
+    if (i < cards.length - 1) lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
 // ============ CURSOR PROMPT ============
 
 export function formatCursorPrompt(repo: TrackedRepo): string {
@@ -292,13 +392,17 @@ export function stageLabel(stage: ProjectStage): string {
 
 export function formatRepoCard(card: RepoCard): string {
   const lines: string[] = [];
-  
+
   if (card.cover_image_url) {
     lines.push(`[​](${card.cover_image_url})`);
   }
-  
-  const vercelUrl = `https://${card.repo}.vercel.app`;
-  lines.push(`**${card.repo}** ${stageLabel(card.stage)} • [live](${vercelUrl})`);
+
+  // Only show live link if homepage is set in GitHub repo settings
+  if (card.homepage) {
+    lines.push(`**${card.repo}** ${stageLabel(card.stage)} • [live](${card.homepage})`);
+  } else {
+    lines.push(`**${card.repo}** ${stageLabel(card.stage)}`);
+  }
   lines.push('');
   lines.push(`_"${card.potential.potential}"_`);
   lines.push('');
@@ -376,3 +480,53 @@ export function formatCompletion(
 
 // Legacy aliases
 export const formatScanDigest = formatScanSummary;
+
+// ============ PROGRESS FORMATTING ============
+
+/**
+ * Format card generation progress for streaming updates
+ */
+export function formatCardProgress(progress: CardProgress): string {
+  const { step, repoName, stage, potential } = progress;
+
+  switch (step) {
+    case 'selecting':
+      return '🔍 Finding your next task...';
+
+    case 'loading':
+      return `🔍 Loading **${repoName}**...`;
+
+    case 'analyzing':
+      return `📊 **${repoName}** • ${stageLabel(stage as ProjectStage)}\n\n💡 Analyzing potential...`;
+
+    case 'context':
+      return `📊 **${repoName}** • ${stageLabel(stage as ProjectStage)}\n\n_"${potential}"_\n\n📝 Getting context...`;
+
+    case 'next_step':
+      return `📊 **${repoName}** • ${stageLabel(stage as ProjectStage)}\n\n_"${potential}"_\n\n🎯 Determining next step...`;
+
+    case 'complete':
+      return `✅ Ready`;
+
+    default:
+      return '⏳ Working...';
+  }
+}
+
+/**
+ * Format card generation error with context
+ */
+export function formatCardError(error: string, repoName?: string): string {
+  const lines: string[] = [];
+
+  if (repoName) {
+    lines.push(`❌ Failed to load **${repoName}**`);
+  } else {
+    lines.push('❌ Failed to generate card');
+  }
+
+  lines.push('');
+  lines.push(`_${error}_`);
+
+  return lines.join('\n');
+}

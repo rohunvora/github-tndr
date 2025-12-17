@@ -316,6 +316,7 @@ async function main() {
                 killed_at: null,
                 shipped_at: null,
                 cover_image_url: null,
+                homepage: null,
               };
               console.log(`│  🎨 Generating AI mockup...`);
               imageBuffer = await generateRepoCover(trackedRepo);
@@ -337,6 +338,7 @@ async function main() {
               killed_at: null,
               shipped_at: null,
               cover_image_url: null,
+              homepage: null,
             };
             imageBuffer = await generateRepoCover(trackedRepo);
           }

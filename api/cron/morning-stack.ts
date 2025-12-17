@@ -7,7 +7,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { stateManager } from '../../lib/state.js';
 import { GitHubClient } from '../../lib/github.js';
 import { generateCard, getFeedMemory, calculatePriority } from '../../lib/card-generator.js';
-import { formatRepoCard, formatCompactCard } from '../../lib/bot/format.js';
+import { formatMorningStack } from '../../lib/bot/format.js';
 import { morningStackKeyboard } from '../../lib/bot/keyboards.js';
 import { TrackedRepo, RepoCard } from '../../lib/core-types.js';
 
@@ -35,39 +35,6 @@ async function sendTelegramMessage(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-}
-
-// Send photo to Telegram
-async function sendTelegramPhoto(
-  chatId: string,
-  photoUrl: string,
-  caption: string,
-  keyboard?: object
-): Promise<boolean> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token || !chatId) return false;
-
-  const body: Record<string, unknown> = {
-    chat_id: chatId,
-    photo: photoUrl,
-    caption,
-    parse_mode: 'Markdown',
-  };
-
-  if (keyboard) {
-    body.reply_markup = keyboard;
-  }
-
-  try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -161,49 +128,15 @@ export default async function handler(req: Request) {
       });
     }
 
-    // Send morning greeting
-    const greeting = cards.length === 1
-      ? `☀️ **Good morning!**\n\nHere's your focus for today:`
-      : `☀️ **Good morning!**\n\nHere's your stack for today (${cards.length} items):`;
+    // Send ONE consolidated message with all cards
+    await sendTelegramMessage(
+      chatId,
+      formatMorningStack(cards),
+      morningStackKeyboard()
+    );
 
-    await sendTelegramMessage(chatId, greeting);
-
-    // Send each card
-    for (let i = 0; i < cards.length; i++) {
-      const card = cards[i];
-      const caption = i === 0 
-        ? formatRepoCard(card)
-        : formatCompactCard(card, i);
-
-      // Try to send with image for first card
-      if (i === 0) {
-        const photoSent = await sendTelegramPhoto(
-          chatId,
-          card.cover_image_url,
-          caption,
-          morningStackKeyboard()
-        );
-        
-        if (!photoSent) {
-          await sendTelegramMessage(chatId, caption, morningStackKeyboard());
-        }
-      } else {
-        // Subsequent cards are compact
-        await sendTelegramMessage(chatId, caption);
-      }
-    }
-
-    // Send closing message
-    if (cards.length > 1) {
-      await sendTelegramMessage(
-        chatId,
-        `\n_Tap "Start First Card" to begin, or /next anytime for more._`,
-        morningStackKeyboard()
-      );
-    }
-
-    return new Response(JSON.stringify({ 
-      success: true, 
+    return new Response(JSON.stringify({
+      success: true,
       action: 'morning_stack_sent',
       cards_sent: cards.length,
     }), {

@@ -53,6 +53,7 @@ export interface RepoCard {
   repo: string;
   full_name: string;
   cover_image_url: string;
+  homepage: string | null;  // GitHub homepage field - used for [live] link
   potential: RepoPotential;
   last_context: LastContext;
   next_step: NextStep;
@@ -265,6 +266,7 @@ export interface TrackedRepo {
   killed_at: string | null;
   shipped_at: string | null;
   cover_image_url: string | null;
+  homepage: string | null;  // GitHub homepage field for deploy URL
 }
 
 // ============ VALIDATION ============

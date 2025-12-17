@@ -266,6 +266,7 @@ async function saveTrackedRepo(
     killed_at: null,
     shipped_at: null,
     cover_image_url: null,
+    homepage: null,
   };
   await stateManager.saveTrackedRepo(tracked);
   return tracked;

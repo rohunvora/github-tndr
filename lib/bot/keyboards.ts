@@ -233,3 +233,12 @@ export function legacyDeepDiveKeyboard(fullName: string): InlineKeyboard {
     .text('⬅️ Back to Feed', `card_next`)
     .text('🚀 Mark Shipped', `card_shipped:${fullName}`);
 }
+
+/**
+ * Error keyboard with retry and skip options
+ */
+export function cardErrorKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('🔄 Retry', 'card_retry')
+    .text('⏭️ Skip to Next', 'card_next');
+}
