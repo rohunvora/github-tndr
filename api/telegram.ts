@@ -325,8 +325,9 @@ bot.on('callback_query:data', async (ctx) => {
   // Handle 'back' - can be session-based (back:sessionId:version) or repo-based (back:owner:name)
   if (action === 'back') {
     const maybeVersion = parseInt(parts[2], 10);
-    if (parts.length === 3 && !isNaN(maybeVersion) && parts[1].length < 20) {
-      // Session-based back (sessionId is short, version is a number)
+    // Session IDs start with 'c_' (e.g., c_abc123), owner names don't
+    if (parts.length === 3 && !isNaN(maybeVersion) && parts[1].startsWith('c_')) {
+      // Session-based back (sessionId starts with c_, version is a number)
       await handleSessionAction(ctx, 'back', parts);
     } else {
       // Repo-based back (owner:name) - handler answers callback
