@@ -206,29 +206,37 @@ bot.command('repo', async (ctx) => {
   const analysisKey = `analyzing:${repoInput.toLowerCase()}`;
   const existingAnalysis = await stateManager.get(analysisKey);
   if (existingAnalysis) {
-    // Check if stale (> 90 seconds old) and clear it
     const lockTime = parseInt(existingAnalysis);
     if (Date.now() - lockTime > 90000) {
       await stateManager.delete(analysisKey);
     } else {
-      return; // Still processing
+      return;
     }
   }
   await stateManager.set(analysisKey, Date.now().toString(), 120);
 
   const startTime = Date.now();
-  const elapsed = () => `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
+  const elapsed = () => Math.floor((Date.now() - startTime) / 1000);
+  let currentStep = 'starting...';
+  let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   
-  // Single progress message - Cursor-style with elapsed time
-  const progressMsg = await ctx.reply(`🔍 **Analyzing ${repoInput}**\n\n⏱ 0.0s\n\n\`resolving repo...\``, { parse_mode: 'Markdown' });
+  const progressMsg = await ctx.reply(`🔍 **${repoInput}**\n⏱ 0s · \`starting...\``, { parse_mode: 'Markdown' });
   
-  const updateProgress = async (step: string, detail?: string) => {
+  const updateProgress = async (step: string) => {
+    currentStep = step;
     try {
-      let msg = `🔍 **Analyzing ${repoInput}**\n\n⏱ ${elapsed()}\n\n\`${step}\``;
-      if (detail) msg += `\n_${detail}_`;
-      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, msg, { parse_mode: 'Markdown' });
-    } catch { /* ignore edit errors */ }
+      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, 
+        `🔍 **${repoInput}**\n⏱ ${elapsed()}s · \`${step}\``, { parse_mode: 'Markdown' });
+    } catch { /* ignore */ }
   };
+  
+  // Heartbeat: update elapsed time every 3s so user sees it's alive
+  heartbeatInterval = setInterval(async () => {
+    try {
+      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
+        `🔍 **${repoInput}**\n⏱ ${elapsed()}s · \`${currentStep}\``, { parse_mode: 'Markdown' });
+    } catch { /* ignore */ }
+  }, 3000);
 
   try {
     let owner: string;
@@ -237,37 +245,33 @@ bot.command('repo', async (ctx) => {
     if (repoInput.includes('/')) {
       [owner, name] = repoInput.split('/');
     } else {
-      await updateProgress('searching your repos...');
+      await updateProgress('searching repos...');
       const allRepos = await getGitHub().getUserRepos();
       const repo = allRepos.find(r => r.name.toLowerCase() === repoInput.toLowerCase());
       if (!repo) { 
+        clearInterval(heartbeatInterval);
         await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
-          `❌ Repo "${repoInput}" not found in your repos.\n\nFor external repos, use: /repo owner/name`);
+          `❌ "${repoInput}" not found. Use /repo owner/name for external repos.`);
         await stateManager.delete(analysisKey);
         return; 
       }
       [owner, name] = repo.full_name.split('/');
     }
     
-    await updateProgress('fetching repo metadata...', `github.com/${owner}/${name}`);
+    await updateProgress('fetching metadata...');
     const repoInfo = await getGitHub().getRepoInfo(owner, name);
     if (!repoInfo) {
+      clearInterval(heartbeatInterval);
       await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
-        `❌ Repo "${owner}/${name}" not found or not accessible.`);
+        `❌ "${owner}/${name}" not found or private.`);
       await stateManager.delete(analysisKey);
       return;
     }
     
-    await updateProgress('reading README.md...');
-    await updateProgress('fetching file tree...');
-    await updateProgress('checking commit history...');
-    await updateProgress('asking Claude to analyze...', 'examining code evidence');
-    
+    await updateProgress('Claude analyzing...');
     const analysis = await getAnalyzer().analyzeRepo(owner, name);
 
-    await updateProgress('validating evidence anchors...');
-    await updateProgress('saving to database...');
-    
+    await updateProgress('saving...');
     const tracked: TrackedRepo = {
       id: `${owner}/${name}`, name, owner,
       state: verdictToState(analysis.verdict),
@@ -278,7 +282,7 @@ bot.command('repo', async (ctx) => {
     };
     await stateManager.saveTrackedRepo(tracked);
 
-    // Replace progress with final result
+    clearInterval(heartbeatInterval);
     await ctx.api.deleteMessage(ctx.chat!.id, progressMsg.message_id);
     const msg = await ctx.reply(formatAnalysis(tracked), {
       parse_mode: 'Markdown', reply_markup: analysisKeyboard(tracked),
@@ -287,13 +291,14 @@ bot.command('repo', async (ctx) => {
     await stateManager.updateRepoMessageId(owner, name, msg.message_id);
     
   } catch (error) {
+    clearInterval(heartbeatInterval!);
     const errMsg = error instanceof Error ? error.message : 'Unknown error';
     await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id,
-      `❌ **Analysis failed** (${elapsed()})\n\n\`${errMsg.substring(0, 200)}\``, {
-      parse_mode: 'Markdown',
+      `❌ Failed (${elapsed()}s): ${errMsg.substring(0, 150)}`, {
       reply_markup: new InlineKeyboard().text('🔄 Retry', `retryname:${repoInput}`),
     });
   } finally {
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
     await stateManager.delete(analysisKey);
   }
 });
