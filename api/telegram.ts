@@ -9,6 +9,7 @@ import { stateManager } from '../lib/state.js';
 import { GitHubClient } from '../lib/github.js';
 import { TrackedRepo } from '../lib/core-types.js';
 import { handleRepo, handleRepoDetails, handleRepoBack } from '../lib/bot/handlers/repo.js';
+import { handleWatch, handleUnwatch, handleWatching, handleMute } from '../lib/bot/handlers/watch.js';
 import {
   formatProgress, formatScanSummary, formatCategoryView, formatStatus, formatCard, formatDetails,
   formatCursorPrompt, formatRepoCard, formatNoMoreCards, formatCompletion,
@@ -93,6 +94,9 @@ bot.command('help', async (ctx) => {
 /scan — Analyze recent repos
 /repo <name> — Deep dive one repo
 /status — See repo counts
+/watch <repo> — Get push notifications
+/unwatch <repo> — Stop notifications
+/watching — List watched repos
 /cancel — Cancel running scan`, { parse_mode: 'Markdown' });
 });
 
@@ -164,6 +168,25 @@ bot.command('repo', async (ctx) => {
   const input = (ctx.message?.text || '').replace('/repo', '').trim();
   if (!input) { await ctx.reply('Usage: /repo <name> or /repo owner/name'); return; }
   await handleRepo(ctx, input);
+});
+
+bot.command('watch', async (ctx) => {
+  if (ctx.from?.id.toString() !== chatId) return;
+  const input = (ctx.message?.text || '').replace('/watch', '').trim();
+  if (!input) { await ctx.reply('Usage: /watch <repo>'); return; }
+  await handleWatch(ctx, input);
+});
+
+bot.command('unwatch', async (ctx) => {
+  if (ctx.from?.id.toString() !== chatId) return;
+  const input = (ctx.message?.text || '').replace('/unwatch', '').trim();
+  if (!input) { await ctx.reply('Usage: /unwatch <repo>'); return; }
+  await handleUnwatch(ctx, input);
+});
+
+bot.command('watching', async (ctx) => {
+  if (ctx.from?.id.toString() !== chatId) return;
+  await handleWatching(ctx);
 });
 
 // ============ SCAN ============
@@ -291,9 +314,31 @@ bot.on('callback_query:data', async (ctx) => {
   info('cb', action, { data: data.substring(0, 50) });
 
   // Session-based card actions: action:sessionId:version
-  const sessionActions = ['do', 'skip', 'deep', 'back', 'ship', 'shipok', 'done', 'dostep'];
+  // Note: 'back' handled separately below (can be session or repo)
+  const sessionActions = ['do', 'skip', 'deep', 'ship', 'shipok', 'done', 'dostep'];
   if (sessionActions.includes(action)) {
     await handleSessionAction(ctx, action, parts);
+    return;
+  }
+  
+  // Handle 'back' - can be session-based (back:sessionId:version) or repo-based (back:owner:name)
+  if (action === 'back') {
+    const maybeVersion = parseInt(parts[2], 10);
+    if (parts.length === 3 && !isNaN(maybeVersion) && parts[1].length < 20) {
+      // Session-based back (sessionId is short, version is a number)
+      await handleSessionAction(ctx, 'back', parts);
+    } else {
+      // Repo-based back (owner:name) - handler answers callback
+      await handleRepoBack(ctx, parts[1], parts[2]);
+    }
+    return;
+  }
+  
+  // Handle mute callbacks: mute:owner:name:duration
+  if (action === 'mute') {
+    const fullName = `${parts[1]}/${parts[2]}`;
+    const duration = parts[3]; // 1d, 1w, or forever
+    await handleMute(ctx, fullName, duration);
     return;
   }
 
@@ -360,19 +405,9 @@ bot.on('callback_query:data', async (ctx) => {
     return;
   }
 
-  // More/Back for repo details
+  // More for repo details (back handled above)
   if (action === 'more') {
     await handleRepoDetails(ctx, parts[1], parts[2]);
-    return;
-  }
-
-  if (action === 'back') {
-    // Check if it's session-based (3 parts with number) or repo-based (owner:name)
-    if (parts.length === 3 && !isNaN(parseInt(parts[2]))) {
-      // Session-based, handled above
-    } else {
-      await handleRepoBack(ctx, parts[1], parts[2]);
-    }
     return;
   }
 

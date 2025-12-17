@@ -98,7 +98,8 @@ EMBARRASSED (broken or misleading):
 
 Return ONLY valid JSON:
 {
-  "one_liner": "One sentence, max 140 chars",
+  "one_liner": "One sentence summary, max 140 chars (can include README phrasing)",
+  "code_one_liner": "What the code ACTUALLY does, max 100 chars (derived from file structure, not README claims)",
   "what_it_does": "2-3 sentences",
   "has_core": true/false,
   "core_value": "The one valuable thing (or null)",
@@ -133,6 +134,7 @@ ${previousResponse.substring(0, 500)}
 
 {
   "one_liner": "string max 140 chars",
+  "code_one_liner": "string max 100 chars (code-derived)",
   "what_it_does": "string",
   "has_core": boolean,
   "core_value": "string or null",

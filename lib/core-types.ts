@@ -213,6 +213,7 @@ export const ReadmeClaimSchema = z.object({
 export const CoreAnalysisSchema = z.object({
   // Basic identification
   one_liner: z.string().max(140),
+  code_one_liner: z.string().max(100).optional().default(''), // Code-derived, not README-ish
   what_it_does: z.string(),
   
   // Core determination

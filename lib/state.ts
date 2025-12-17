@@ -147,6 +147,64 @@ export class StateManager {
   async delete(key: string): Promise<void> {
     await kv.del(key);
   }
+
+  // ============ WATCHED REPOS (for push notifications) ============
+
+  async getWatchedRepos(): Promise<string[]> {
+    const watched = await kv.get<string[]>('watched_repos');
+    return watched || [];
+  }
+
+  async addWatchedRepo(fullName: string): Promise<void> {
+    const watched = await this.getWatchedRepos();
+    if (!watched.includes(fullName)) {
+      watched.push(fullName);
+      await kv.set('watched_repos', watched);
+    }
+  }
+
+  async removeWatchedRepo(fullName: string): Promise<void> {
+    const watched = await this.getWatchedRepos();
+    const filtered = watched.filter(r => r !== fullName);
+    await kv.set('watched_repos', filtered);
+    // Also clear mute
+    await kv.del(`muted:${fullName}`);
+  }
+
+  async isRepoWatched(fullName: string): Promise<boolean> {
+    const watched = await this.getWatchedRepos();
+    return watched.includes(fullName);
+  }
+
+  async muteWatchedRepo(fullName: string, muteUntil: string): Promise<void> {
+    await kv.set(`muted:${fullName}`, muteUntil);
+  }
+
+  async getRepoMuteUntil(fullName: string): Promise<string | null> {
+    return kv.get<string>(`muted:${fullName}`);
+  }
+
+  async isRepoMuted(fullName: string): Promise<boolean> {
+    const muteUntil = await this.getRepoMuteUntil(fullName);
+    if (!muteUntil) return false;
+    return new Date(muteUntil) > new Date();
+  }
+
+  // Helper to find tracked repo by name only
+  async getTrackedRepoByName(name: string): Promise<TrackedRepo | null> {
+    const all = await this.getAllTrackedRepos();
+    return all.find(r => r.name.toLowerCase() === name.toLowerCase()) || null;
+  }
+
+  // ============ PUSH TRACKING (idempotency) ============
+
+  async getLastProcessedSha(fullName: string): Promise<string | null> {
+    return kv.get<string>(`last_sha:${fullName}`);
+  }
+
+  async setLastProcessedSha(fullName: string, sha: string): Promise<void> {
+    await kv.set(`last_sha:${fullName}`, sha);
+  }
 }
 
 export const stateManager = new StateManager();

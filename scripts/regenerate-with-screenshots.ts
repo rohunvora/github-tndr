@@ -212,6 +212,7 @@ async function generateAI(result: SummaryResult): Promise<Buffer> {
     state: 'ready',
     analysis: {
       one_liner: result.one_liner || result.core_value!,
+      code_one_liner: result.core_value!, // Code-derived
       what_it_does: result.what_it_does || result.core_value!,
       core_value: result.core_value!,
       why_core: result.why_core || '',

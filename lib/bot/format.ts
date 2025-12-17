@@ -31,9 +31,17 @@ const verdictLabel: Record<string, string> = {
   dead: 'DEAD',
 };
 
+const prideEmoji: Record<string, string> = {
+  proud: '🟢',
+  comfortable: '🟡',
+  neutral: '😐',
+  embarrassed: '🔴',
+};
+
 /**
  * Minimal card view — fits on one phone screen
- * Shows: name, verdict, one-liner, next action
+ * Shows: verdict + code-core + mismatch flag + next action + pride
+ * Uses code_one_liner (code-derived) not one_liner (README-ish)
  */
 export function formatCard(repo: TrackedRepo): string {
   const a = repo.analysis;
@@ -42,82 +50,106 @@ export function formatCard(repo: TrackedRepo): string {
   const emoji = verdictEmoji[a.verdict] || '⚪';
   const label = verdictLabel[a.verdict] || a.verdict.toUpperCase();
   
+  // Use code_one_liner if available, fallback to one_liner
+  const codeLine = a.code_one_liner || a.one_liner;
+  
   let msg = `━━━ ${repo.name} ━━━\n`;
   msg += `${emoji} **${label}**\n\n`;
-  msg += `${a.one_liner}\n`;
+  msg += `${codeLine}\n`;
   
-  // One line of context
-  if (a.verdict_reason) {
-    const reason = a.verdict_reason.length > 80 
-      ? a.verdict_reason.slice(0, 77) + '...' 
-      : a.verdict_reason;
-    msg += `_${reason}_\n`;
+  // Mismatch flag (brief, on card)
+  if (a.mismatch_evidence?.length) {
+    const m = a.mismatch_evidence[0];
+    const short = m.conflict.length > 40 ? m.conflict.slice(0, 37) + '...' : m.conflict;
+    msg += `⚠️ README ≠ code: ${short}\n`;
   }
   
-  // Next action (if cut or ship)
+  // Next action
   if (a.verdict === 'cut_to_core' && a.cut.length > 0) {
     msg += `\n→ Delete: ${a.cut.slice(0, 3).join(', ')}`;
     if (a.cut.length > 3) msg += ` (+${a.cut.length - 3})`;
+    msg += '\n';
   } else if (a.verdict === 'ship' && a.tweet_draft) {
-    msg += `\n→ Ready to post`;
+    msg += `\n→ Ready to post\n`;
+  } else if (a.verdict === 'no_core') {
+    msg += `\n→ Find or create the core\n`;
   }
+  
+  // Pride with blocker count
+  const pride = a.pride_level || 'neutral';
+  const blockerCount = a.pride_blockers?.length || 0;
+  msg += `\nPride: ${prideEmoji[pride] || '😐'} ${pride}`;
+  if (blockerCount > 0) msg += ` (${blockerCount} blocker${blockerCount > 1 ? 's' : ''})`;
 
   return msg;
 }
 
 /**
  * Full details view — shown when "More" is tapped
+ * DIFFERENT content from card view: evidence, proof, full cut list, shareable
+ * Does NOT repeat card content
  */
 export function formatDetails(repo: TrackedRepo): string {
   const a = repo.analysis;
   if (!a) return `━━━ ${repo.name} ━━━\n❌ No analysis`;
 
-  let msg = `━━━ ${repo.name} ━━━\n`;
-  msg += `${a.one_liner}\n\n`;
+  let msg = `📋 **${repo.name}** — Details\n\n`;
 
-  // What it does
-  msg += `**WHAT IT DOES**\n${a.what_it_does}\n\n`;
-
-  // Core value + evidence
+  // Core evidence (not shown on card)
   if (a.has_core && a.core_value) {
-    msg += `**CORE VALUE**\n${a.core_value}\n`;
+    msg += `**CORE:** ${a.core_value}\n`;
     if (a.core_evidence?.length) {
-      a.core_evidence.slice(0, 3).forEach(ev => {
-        msg += `├─ \`${ev.file}\` → ${ev.symbols.slice(0, 2).join(', ')}\n`;
+      msg += `**Evidence:**\n`;
+      a.core_evidence.slice(0, 4).forEach(ev => {
+        msg += `• \`${ev.file}\` → ${ev.symbols.join(', ')}\n`;
+        if (ev.reason) msg += `  _${ev.reason}_\n`;
       });
     }
     msg += '\n';
   }
 
-  // Mismatch warning
-  if (a.mismatch_evidence?.length) {
-    const m = a.mismatch_evidence[0];
-    msg += `⚠️ **README ≠ CODE**\n`;
-    msg += `README says: "${m.readme_section}"\n`;
-    msg += `Code shows: ${m.code_anchor}\n\n`;
+  // README claims proof (not shown on card)
+  if (a.readme_claims?.length) {
+    msg += `**README CLAIMS:**\n`;
+    a.readme_claims.slice(0, 3).forEach(claim => {
+      const icon = claim.support === 'supported' ? '✓' : claim.support === 'partial' ? '~' : '✗';
+      msg += `${icon} "${claim.claim.slice(0, 50)}${claim.claim.length > 50 ? '...' : ''}"\n`;
+    });
+    msg += '\n';
   }
 
-  // Cut list
+  // Mismatch proof with full details
+  if (a.mismatch_evidence?.length) {
+    msg += `⚠️ **MISMATCH PROOF:**\n`;
+    a.mismatch_evidence.slice(0, 2).forEach(m => {
+      msg += `README: "${m.readme_section}"\n`;
+      msg += `CODE: \`${m.code_anchor}\`\n`;
+      msg += `→ ${m.conflict}\n\n`;
+    });
+  }
+
+  // Full cut list
   if (a.cut.length > 0) {
-    msg += `**CUT LIST** (${a.cut.length})\n`;
-    msg += a.cut.slice(0, 8).map(f => `• ${f}`).join('\n');
-    if (a.cut.length > 8) msg += `\n_+${a.cut.length - 8} more_`;
+    msg += `**CUT LIST** (${a.cut.length} files)\n`;
+    msg += a.cut.slice(0, 10).map(f => `• ${f}`).join('\n');
+    if (a.cut.length > 10) msg += `\n_+${a.cut.length - 10} more_`;
     msg += '\n\n';
   }
 
-  // Pride
-  const prideEmoji: Record<string, string> = { proud: '🟢', comfortable: '🟡', neutral: '😐', embarrassed: '🔴' };
-  const pride = a.pride_level || 'neutral';
-  msg += `**PRIDE:** ${prideEmoji[pride] || '😐'} ${pride}\n`;
+  // Blockers (detailed)
   if (a.pride_blockers?.length) {
-    msg += `Blockers: ${a.pride_blockers.slice(0, 3).join(', ')}\n`;
+    msg += `**BLOCKERS:**\n`;
+    a.pride_blockers.forEach(b => {
+      msg += `• ${b}\n`;
+    });
+    msg += '\n';
   }
 
-  // Tweet or shareable angle
-  if (a.tweet_draft) {
-    msg += `\n**TWEET**\n\`\`\`\n${a.tweet_draft}\n\`\`\``;
-  } else if (a.shareable_angle) {
-    msg += `\n**SHAREABLE LATER:** "${a.shareable_angle}"`;
+  // Shareable angle (only in details)
+  if (a.shareable_angle) {
+    msg += `**SHAREABLE ANGLE:**\n"${a.shareable_angle}"`;
+  } else if (a.tweet_draft) {
+    msg += `**TWEET:**\n\`\`\`\n${a.tweet_draft}\n\`\`\``;
   }
 
   return msg;
