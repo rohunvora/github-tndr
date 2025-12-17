@@ -1,4 +1,9 @@
+// Telegram message formatters
+// Principle: Scannable > Comprehensive
+
 import { TrackedRepo, RepoState, RepoCard, ProjectStage } from '../core-types.js';
+
+// ============ TYPES ============
 
 export interface GroupedRepos {
   ship: TrackedRepo[];
@@ -8,32 +13,117 @@ export interface GroupedRepos {
   shipped: TrackedRepo[];
 }
 
-export interface RepoCounts {
-  total: number;
-  ready: number;
-  has_core: number;
-  no_core: number;
-  dead: number;
-  shipped: number;
-  analyzing: number;
+export type CategoryKey = 'ship' | 'cut' | 'no_core' | 'dead' | 'shipped' | 'all';
+
+// ============ CORE: Card View (Scannable) ============
+
+const verdictEmoji: Record<string, string> = {
+  ship: '🟢',
+  cut_to_core: '🟡',
+  no_core: '🔴',
+  dead: '☠️',
+};
+
+const verdictLabel: Record<string, string> = {
+  ship: 'SHIP',
+  cut_to_core: 'CUT TO CORE',
+  no_core: 'NO CORE',
+  dead: 'DEAD',
+};
+
+/**
+ * Minimal card view — fits on one phone screen
+ * Shows: name, verdict, one-liner, next action
+ */
+export function formatCard(repo: TrackedRepo): string {
+  const a = repo.analysis;
+  if (!a) return `━━━ ${repo.name} ━━━\n❌ Analysis failed`;
+
+  const emoji = verdictEmoji[a.verdict] || '⚪';
+  const label = verdictLabel[a.verdict] || a.verdict.toUpperCase();
+  
+  let msg = `━━━ ${repo.name} ━━━\n`;
+  msg += `${emoji} **${label}**\n\n`;
+  msg += `${a.one_liner}\n`;
+  
+  // One line of context
+  if (a.verdict_reason) {
+    const reason = a.verdict_reason.length > 80 
+      ? a.verdict_reason.slice(0, 77) + '...' 
+      : a.verdict_reason;
+    msg += `_${reason}_\n`;
+  }
+  
+  // Next action (if cut or ship)
+  if (a.verdict === 'cut_to_core' && a.cut.length > 0) {
+    msg += `\n→ Delete: ${a.cut.slice(0, 3).join(', ')}`;
+    if (a.cut.length > 3) msg += ` (+${a.cut.length - 3})`;
+  } else if (a.verdict === 'ship' && a.tweet_draft) {
+    msg += `\n→ Ready to post`;
+  }
+
+  return msg;
 }
 
-export function stateEmoji(state: RepoState): string {
-  const map: Record<RepoState, string> = {
-    ready: '🟢', shipped: '🚀', has_core: '🟡', no_core: '🔴',
-    dead: '☠️', analyzing: '⏳', unanalyzed: '⚪',
-  };
-  return map[state] || '⚪';
+/**
+ * Full details view — shown when "More" is tapped
+ */
+export function formatDetails(repo: TrackedRepo): string {
+  const a = repo.analysis;
+  if (!a) return `━━━ ${repo.name} ━━━\n❌ No analysis`;
+
+  let msg = `━━━ ${repo.name} ━━━\n`;
+  msg += `${a.one_liner}\n\n`;
+
+  // What it does
+  msg += `**WHAT IT DOES**\n${a.what_it_does}\n\n`;
+
+  // Core value + evidence
+  if (a.has_core && a.core_value) {
+    msg += `**CORE VALUE**\n${a.core_value}\n`;
+    if (a.core_evidence?.length) {
+      a.core_evidence.slice(0, 3).forEach(ev => {
+        msg += `├─ \`${ev.file}\` → ${ev.symbols.slice(0, 2).join(', ')}\n`;
+      });
+    }
+    msg += '\n';
+  }
+
+  // Mismatch warning
+  if (a.mismatch_evidence?.length) {
+    const m = a.mismatch_evidence[0];
+    msg += `⚠️ **README ≠ CODE**\n`;
+    msg += `README says: "${m.readme_section}"\n`;
+    msg += `Code shows: ${m.code_anchor}\n\n`;
+  }
+
+  // Cut list
+  if (a.cut.length > 0) {
+    msg += `**CUT LIST** (${a.cut.length})\n`;
+    msg += a.cut.slice(0, 8).map(f => `• ${f}`).join('\n');
+    if (a.cut.length > 8) msg += `\n_+${a.cut.length - 8} more_`;
+    msg += '\n\n';
+  }
+
+  // Pride
+  const prideEmoji: Record<string, string> = { proud: '🟢', comfortable: '🟡', neutral: '😐', embarrassed: '🔴' };
+  const pride = a.pride_level || 'neutral';
+  msg += `**PRIDE:** ${prideEmoji[pride] || '😐'} ${pride}\n`;
+  if (a.pride_blockers?.length) {
+    msg += `Blockers: ${a.pride_blockers.slice(0, 3).join(', ')}\n`;
+  }
+
+  // Tweet or shareable angle
+  if (a.tweet_draft) {
+    msg += `\n**TWEET**\n\`\`\`\n${a.tweet_draft}\n\`\`\``;
+  } else if (a.shareable_angle) {
+    msg += `\n**SHAREABLE LATER:** "${a.shareable_angle}"`;
+  }
+
+  return msg;
 }
 
-export function formatProgress(done: number, total: number, cached: number, errors: number): string {
-  const filled = Math.floor(done / total * 10);
-  const bar = '🟩'.repeat(filled) + '⬜'.repeat(10 - filled);
-  let status = `⏳ Scanning...\n\n${bar} ${done}/${total}`;
-  if (cached > 0) status += `\n💨 ${cached} cached`;
-  if (errors > 0) status += `\n⚠️ ${errors} errors`;
-  return status;
-}
+// ============ SCAN FORMATTING ============
 
 export function formatScanSummary(groups: GroupedRepos): string {
   const total = Object.values(groups).flat().length;
@@ -49,7 +139,14 @@ export function formatScanSummary(groups: GroupedRepos): string {
   return msg;
 }
 
-export type CategoryKey = 'ship' | 'cut' | 'no_core' | 'dead' | 'shipped' | 'all';
+export function formatProgress(done: number, total: number, cached: number, errors: number): string {
+  const filled = Math.floor(done / total * 10);
+  const bar = '🟩'.repeat(filled) + '⬜'.repeat(10 - filled);
+  let status = `⏳ Scanning...\n\n${bar} ${done}/${total}`;
+  if (cached > 0) status += `\n💨 ${cached} cached`;
+  if (errors > 0) status += `\n⚠️ ${errors} errors`;
+  return status;
+}
 
 const categoryLabels: Record<CategoryKey, string> = {
   ship: '🚀 SHIP',
@@ -90,29 +187,24 @@ export function formatCategoryView(
   return { message: msg, hasMore };
 }
 
-// Keep old function for backwards compatibility
-export function formatScanDigest(groups: GroupedRepos): string {
-  const total = Object.values(groups).flat().length;
-  let msg = `━━━ Scan Complete (${total} repos) ━━━\n\n`;
+// ============ HELPERS ============
 
-  const sections: [string, string, TrackedRepo[]][] = [
-    ['🚀', 'SHIP', groups.ship],
-    ['✂️', 'CUT TO CORE', groups.cut],
-    ['🔴', 'NO CORE', groups.no_core],
-    ['☠️', 'DEAD', groups.dead],
-    ['🏆', 'SHIPPED', groups.shipped],
-  ];
+export function stateEmoji(state: RepoState): string {
+  const map: Record<RepoState, string> = {
+    ready: '🟢', shipped: '🚀', has_core: '🟡', no_core: '🔴',
+    dead: '☠️', analyzing: '⏳', unanalyzed: '⚪',
+  };
+  return map[state] || '⚪';
+}
 
-  for (const [emoji, label, repos] of sections) {
-    if (repos.length > 0) {
-      msg += `${emoji} **${label}** (${repos.length})\n`;
-      msg += repos.map(r => `• ${r.name} — ${r.analysis?.one_liner || 'N/A'}`).join('\n');
-      msg += '\n\n';
-    }
-  }
-
-  msg += `_Type a repo name for full analysis._`;
-  return msg;
+export interface RepoCounts {
+  total: number;
+  ready: number;
+  has_core: number;
+  no_core: number;
+  dead: number;
+  shipped: number;
+  analyzing: number;
 }
 
 export function formatStatus(counts: RepoCounts): string {
@@ -127,102 +219,30 @@ ${counts.analyzing > 0 ? `\`⏳ Analyzing\` ${counts.analyzing}\n` : ''}
 **Total:** ${counts.total}`;
 }
 
-const prideEmoji: Record<string, string> = {
-  proud: '🟢',
-  comfortable: '🟡',
-  neutral: '😐',
-  embarrassed: '🔴',
-};
+// Legacy alias for backwards compatibility
+export const formatAnalysis = formatCard;
 
-export function formatAnalysis(repo: TrackedRepo, seq?: number, total?: number): string {
-  const analysis = repo.analysis;
-  if (!analysis) return `━━━ ${repo.name} ━━━\nAnalysis failed.`;
-
-  const prefix = seq && total ? `[${seq}/${total}] ` : '';
-  let msg = `${prefix}━━━ ${repo.name} ━━━\n`;
-  msg += `${stateEmoji(repo.state)} ${analysis.one_liner}\n\n`;
-  msg += `${analysis.what_it_does}\n\n`;
-
-  // Core with evidence
-  if (analysis.has_core && analysis.core_value) {
-    msg += `**CORE:** ${analysis.core_value}\n`;
-    
-    // Show evidence anchors
-    if (analysis.core_evidence && analysis.core_evidence.length > 0) {
-      analysis.core_evidence.slice(0, 3).forEach(ev => {
-        const symbols = ev.symbols.slice(0, 2).join(', ');
-        msg += `├─ \`${ev.file}\` → ${symbols}\n`;
-      });
-    }
-  }
-
-  // README mismatch warning with proof
-  if (analysis.mismatch_evidence && analysis.mismatch_evidence.length > 0) {
-    msg += `\n⚠️ **README MISMATCH**\n`;
-    const mismatch = analysis.mismatch_evidence[0];
-    msg += `README: "${mismatch.readme_section}"\n`;
-    msg += `CODE: ${mismatch.code_anchor}\n`;
-    msg += `└─ ${mismatch.conflict}\n`;
-  }
-
-  // Cut list
-  if (analysis.cut.length > 0) {
-    msg += `\n**Cut:** ${analysis.cut.slice(0, 5).join(', ')}`;
-    if (analysis.cut.length > 5) msg += ` (+${analysis.cut.length - 5} more)`;
-    msg += '\n';
-  }
-
-  // Verdict
-  msg += `\n**Verdict:** ${analysis.verdict}\n`;
-  msg += `_${analysis.verdict_reason}_\n`;
-
-  // Pride level with blockers
-  const pride = analysis.pride_level || 'neutral';
-  msg += `\n**Pride:** ${prideEmoji[pride] || '😐'} ${pride.charAt(0).toUpperCase() + pride.slice(1)}\n`;
-  
-  if (analysis.pride_blockers && analysis.pride_blockers.length > 0) {
-    msg += `**Blockers:**\n`;
-    analysis.pride_blockers.slice(0, 3).forEach(blocker => {
-      msg += `• ${blocker}\n`;
-    });
-  }
-
-  // Tweet only if proud, otherwise show shareable angle
-  if (analysis.tweet_draft) {
-    msg += `\n**Tweet:**\n\`\`\`\n${analysis.tweet_draft}\n\`\`\``;
-  } else if (analysis.shareable_angle) {
-    msg += `\n**Shareable later:** _"${analysis.shareable_angle}"_\n`;
-    if (analysis.pride_blockers && analysis.pride_blockers.length > 0) {
-      msg += `(needs: ${analysis.pride_blockers.slice(0, 2).join(', ')})\n`;
-    }
-  }
-
-  return msg;
-}
+// ============ CURSOR PROMPT ============
 
 export function formatCursorPrompt(repo: TrackedRepo): string {
-  const analysis = repo.analysis;
-  if (!analysis) return 'No analysis available.';
+  const a = repo.analysis;
+  if (!a) return 'No analysis available.';
 
-  const keepList = analysis.keep.join(', ');
-  const cutLines = analysis.cut.slice(0, 10).map(f => `│ - ${f}`).join('\n');
-  const more = analysis.cut.length > 10 ? `│ ... and ${analysis.cut.length - 10} more` : '';
+  const cutLines = a.cut.slice(0, 10).map(f => `│ - ${f}`).join('\n');
+  const more = a.cut.length > 10 ? `│ ... and ${a.cut.length - 10} more` : '';
 
   return `┌─────────────────────────────────────────────────┐
 │ Refactor ${repo.name} to its core
 │                                                 
-│ Goal: Focus on ${analysis.core_value || 'the core functionality'}
+│ Goal: ${a.core_value || 'Focus on core functionality'}
 │                                                 
 │ Delete:                                         
 ${cutLines}
 ${more}
 │                                                 
-│ Keep: ${keepList.substring(0, 40)}${keepList.length > 40 ? '...' : ''}
-│                                                 
-│ Remove all imports/references to deleted files.
+│ Keep: ${a.keep.slice(0, 3).join(', ')}
 │                                                 
 │ Acceptance: App loads with only the core.
-│ No console errors. Deploy succeeds.
 └─────────────────────────────────────────────────┘`;
 }
 
@@ -238,49 +258,25 @@ export function stageLabel(stage: ProjectStage): string {
   return labels[stage] || stage;
 }
 
-function confidenceIndicator(confidence: 'high' | 'medium' | 'low'): string {
-  const indicators: Record<string, string> = {
-    high: '●●●',
-    medium: '●●○',
-    low: '●○○',
-  };
-  return indicators[confidence] || '○○○';
-}
-
-/**
- * Format a RepoCard for Telegram display as TEXT message
- * Uses zero-width space + URL to trigger link preview for cover image
- * Text messages allow 4096 chars (vs 1024 caption limit)
- */
 export function formatRepoCard(card: RepoCard): string {
   const lines: string[] = [];
   
-  // Zero-width space + URL triggers link preview for cover image
   if (card.cover_image_url) {
     lines.push(`[​](${card.cover_image_url})`);
   }
   
-  // Header: Name + Stage + Live Link
   const vercelUrl = `https://${card.repo}.vercel.app`;
   lines.push(`**${card.repo}** ${stageLabel(card.stage)} • [live](${vercelUrl})`);
   lines.push('');
-  
-  // Potential (aspirational one-liner)
   lines.push(`_"${card.potential.potential}"_`);
   lines.push('');
-  
-  // Last context
   lines.push(`**LAST:** ${card.last_context.last_context}`);
-  
-  // Next step
   lines.push(`**NEXT:** ${card.next_step.action}`);
   
-  // Why this now (if high confidence)
   if (card.next_step.confidence === 'high' && card.next_step.why_this_now) {
     lines.push(`_${card.next_step.why_this_now}_`);
   }
   
-  // Blocking question (if any)
   if (card.next_step.blocking_question) {
     lines.push('');
     lines.push(`⚠️ ${card.next_step.blocking_question}`);
@@ -289,28 +285,14 @@ export function formatRepoCard(card: RepoCard): string {
   return lines.join('\n');
 }
 
-/**
- * Format a compact card for batch display (morning stack)
- */
 export function formatCompactCard(card: RepoCard, index: number): string {
   return `${index + 1}. **${card.repo}** — ${card.next_step.action}`;
 }
 
-/**
- * Format the "no more cards" message
- */
 export function formatNoMoreCards(): string {
-  return `✅ **You've seen all your repos for today!**
-
-Great work staying on top of things.
-
-_Come back tomorrow for a fresh stack, or use /scan to analyze new repos._`;
+  return `✅ **All caught up!**\n\n_Use /scan to analyze new repos._`;
 }
 
-/**
- * Format deep dive view (expanded card with multiple steps)
- * Fits within 4096 char text message limit
- */
 export function formatDeepDive(
   card: RepoCard,
   deployUrl: string | null,
@@ -318,24 +300,14 @@ export function formatDeepDive(
 ): string {
   const lines: string[] = [];
   
-  // Header
   lines.push(`**${card.repo}** — Deep Dive`);
   lines.push('');
-  
-  // Status
   lines.push(`**Stage:** ${stageLabel(card.stage)}`);
-  if (deployUrl) {
-    lines.push(`**Live:** ${deployUrl}`);
-  }
+  if (deployUrl) lines.push(`**Live:** ${deployUrl}`);
   lines.push('');
-  
-  // Potential
   lines.push(`**Vision:** ${card.potential.potential}`);
   lines.push(`**For:** ${card.potential.icp}`);
-  lines.push(`**Promise:** ${card.potential.promise}`);
   lines.push('');
-  
-  // Next steps
   lines.push('**NEXT STEPS:**');
   lines.push(`1. ${card.next_step.action} ← _primary_`);
   additionalSteps.forEach((step, i) => {
@@ -345,49 +317,30 @@ export function formatDeepDive(
   return lines.join('\n');
 }
 
-/**
- * Format ship confirmation message
- */
 export function formatShipConfirm(repoName: string): string {
-  return `**Ship ${repoName}?**
-
-This marks it shipped and removes it from your feed.`;
+  return `**Ship ${repoName}?**\n\nThis marks it shipped and removes it from your feed.`;
 }
 
-/**
- * Format shipped success message
- */
 export function formatShipped(repoName: string): string {
-  return `🚀 **${repoName}** shipped!
-
-Congrats! Use /next for your next task.`;
+  return `🚀 **${repoName}** shipped!\n\nUse /next for your next task.`;
 }
 
-/**
- * Format card with "artifact sent" indicator
- */
 export function formatRepoCardWithArtifact(card: RepoCard): string {
   return formatRepoCard(card) + '\n\n_⚡ Artifact sent below_';
 }
 
-/**
- * Format completion message after push
- */
 export function formatCompletion(
   repoName: string,
   whatChanged: string,
   liveUrl: string | null
 ): string {
   const lines: string[] = [];
-  
   lines.push(`✅ **${repoName}** updated!`);
   lines.push('');
-  
-  if (liveUrl) {
-    lines.push(`**Live:** ${liveUrl}`);
-  }
-  
+  if (liveUrl) lines.push(`**Live:** ${liveUrl}`);
   lines.push(`**What changed:** ${whatChanged}`);
-  
   return lines.join('\n');
 }
+
+// Legacy aliases
+export const formatScanDigest = formatScanSummary;
