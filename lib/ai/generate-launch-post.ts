@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { RepoPotential } from '../core-types.js';
 import { SHARED_PREAMBLE, parseJsonResponse } from './shared-preamble.js';
+import { AI_MODEL } from '../config.js';
 
 interface LaunchPostInput {
   potential: RepoPotential;
@@ -69,7 +70,7 @@ ${input.user_voice_samples && input.user_voice_samples.length > 0
 Write the launch post and 2 alternate versions.`;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: AI_MODEL,
     max_tokens: 800,
     temperature: 0.6,
     system: SYSTEM_PROMPT,

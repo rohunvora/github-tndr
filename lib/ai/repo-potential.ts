@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { RepoPotential, RepoPotentialOutputSchema } from '../core-types.js';
 import { SHARED_PREAMBLE, wrapUntrustedContent, parseJsonResponse } from './shared-preamble.js';
+import { AI_MODEL } from '../config.js';
 
 const PROMPT_VERSION = 'repoPotential_v1';
 
@@ -50,7 +51,7 @@ ${wrapUntrustedContent(input.readme_excerpt || '(No README)')}
 Generate the aspirational potential for this repo.`;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: AI_MODEL,
     max_tokens: 500,
     temperature: 0.3,
     system: SYSTEM_PROMPT,

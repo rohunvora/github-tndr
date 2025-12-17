@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { LastContext, LastContextOutputSchema } from '../core-types.js';
 import { SHARED_PREAMBLE, parseJsonResponse } from './shared-preamble.js';
+import { AI_MODEL } from '../config.js';
 
 interface LastContextInput {
   recent_commits: Array<{
@@ -66,7 +67,7 @@ ${input.last_bot_interaction ? `Last bot interaction: ${input.last_bot_interacti
 Summarize in 1 sentence what they were last working on.`;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: AI_MODEL,
     max_tokens: 200,
     temperature: 0,
     system: SYSTEM_PROMPT,

@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { RepoCard, ProjectStage } from '../core-types.js';
 import { SHARED_PREAMBLE, parseJsonResponse } from './shared-preamble.js';
+import { AI_MODEL } from '../config.js';
 
 interface DeepDiveInput {
   repo_card: RepoCard;
@@ -69,7 +70,7 @@ ${input.file_tree && input.file_tree.length > 0
 Provide a summary and exactly 3 next steps ordered by leverage.`;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: AI_MODEL,
     max_tokens: 600,
     temperature: 0.2,
     system: SYSTEM_PROMPT,

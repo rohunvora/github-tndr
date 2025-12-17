@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { WhatChangedOutputSchema } from '../core-types.js';
 import { SHARED_PREAMBLE, parseJsonResponse } from './shared-preamble.js';
+import { AI_MODEL } from '../config.js';
 
 interface WhatChangedInput {
   commit_sha: string;
@@ -65,7 +66,7 @@ ${input.previous_next_step ? `Expected work: ${input.previous_next_step}` : ''}
 Summarize in 1 sentence.`;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: AI_MODEL,
     max_tokens: 200,
     temperature: 0,
     system: SYSTEM_PROMPT,

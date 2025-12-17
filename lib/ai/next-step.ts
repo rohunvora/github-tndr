@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { NextStep, NextStepOutputSchema, RepoPotential, DeployState, PackagingChecks, ProjectStage } from '../core-types.js';
 import { SHARED_PREAMBLE, parseJsonResponse } from './shared-preamble.js';
+import { AI_MODEL } from '../config.js';
 
 interface NextStepInput {
   readme_todos: string[];
@@ -187,7 +188,7 @@ README TODOs: ${input.readme_todos.length > 0 ? input.readme_todos.join(', ') : 
 What is the single highest-leverage next step to ship this?`;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: AI_MODEL,
     max_tokens: 500,
     temperature: 0,
     system: SYSTEM_PROMPT,

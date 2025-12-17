@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { RepoPotential } from '../core-types.js';
 import { SHARED_PREAMBLE, parseJsonResponse } from './shared-preamble.js';
+import { AI_MODEL } from '../config.js';
 
 interface CopyInput {
   potential: RepoPotential;
@@ -59,7 +60,7 @@ ${input.current_copy_excerpt ? `Current copy (for reference):\n${input.current_c
 Generate punchy, outcome-focused copy.`;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: AI_MODEL,
     max_tokens: 500,
     temperature: 0.4,
     system: SYSTEM_PROMPT,

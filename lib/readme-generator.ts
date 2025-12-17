@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { CoreAnalysis } from './core-types.js';
 import { GitHubRepo } from './github.js';
+import { AI_MODEL } from './config.js';
 
 export interface ReadmeContext {
   repo: GitHubRepo;
@@ -91,7 +92,7 @@ export class ReadmeGenerator {
       .replace('{{package_json}}', ctx.packageJson?.substring(0, 1000) || '(No package.json)');
 
     const response = await this.anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: AI_MODEL,
       max_tokens: 4000,
       temperature: 0.3,
       messages: [{ role: 'user', content: prompt }],
