@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { CoreAnalysis } from '../core-types.js';
 import { AI_MODEL } from '../config.js';
+import { PortfolioSnapshot, formatPortfolioForPrompt } from '../portfolio.js';
 
 interface PushContext {
   repoName: string;
@@ -12,20 +13,18 @@ interface PushContext {
     modified: string[];
   }>;
   analysis?: CoreAnalysis | null;
+  portfolio?: PortfolioSnapshot | null;  // NEW: Portfolio context
 }
 
 /**
  * Generate cofounder-style feedback on a push
- * The AI acts as an accountability partner who:
- * - Is specific about what was done
- * - Relates it to stated goals/blockers (if known)
- * - Keeps it brief (push notification, not essay)
+ * Now portfolio-aware: can relate this push to user's overall work
  */
 export async function generatePushFeedback(
   anthropic: Anthropic,
   context: PushContext
 ): Promise<string> {
-  const { repoName, commits, analysis } = context;
+  const { repoName, fullName, commits, analysis, portfolio } = context;
 
   // Summarize the commits
   const commitSummary = commits.map(c => {
@@ -33,17 +32,27 @@ export async function generatePushFeedback(
       ...c.added.map(f => `+${f}`),
       ...c.removed.map(f => `-${f}`),
       ...c.modified.map(f => `~${f}`),
-    ].slice(0, 5); // Limit files shown
+    ].slice(0, 5);
     const moreFiles = c.added.length + c.removed.length + c.modified.length - files.length;
     const fileStr = files.join(', ') + (moreFiles > 0 ? ` (+${moreFiles} more)` : '');
     return `- "${c.message}" [${fileStr}]`;
   }).join('\n');
 
-  // TWO COMPLETELY DIFFERENT PATHS based on whether we have analysis
+  // Build portfolio context string (keep it small for LLM)
+  const portfolioContext = portfolio ? formatPortfolioForPrompt(portfolio) : null;
+  
+  // Determine if this is the user's stated focus
+  const isFocus = portfolio?.focus === fullName;
+  
+  // Count other active projects
+  const otherActiveCount = portfolio 
+    ? portfolio.counts.active - (portfolio.projects.find(p => p.full_name === fullName)?.status === 'active' ? 1 : 0)
+    : 0;
+
   let prompt: string;
 
   if (analysis) {
-    // KNOWN REPO: Has prior analysis, can reference blockers/goals
+    // KNOWN REPO: Has prior analysis
     prompt = `You are the user's cofounder. They just pushed code to ${repoName}.
 
 Commits:
@@ -55,32 +64,42 @@ Repo context:
 - Pride blockers: ${analysis.pride_blockers?.join(', ') || 'None identified'}
 - One-liner: ${analysis.code_one_liner || analysis.one_liner || 'N/A'}
 
-Respond in 1-2 sentences. Be SPECIFIC about what they did. If relevant, relate to their blockers or goals.
+${portfolioContext ? `Portfolio context:\n${portfolioContext}\n` : ''}
+${isFocus ? 'This repo IS their stated focus.' : portfolio?.focus ? `Their stated focus is ${portfolio.focus}, not this repo.` : ''}
+
+Respond in 1-2 sentences. Be SPECIFIC about what they did.
+${portfolioContext ? `You may briefly reference portfolio context if relevant (e.g., "1 of ${portfolio?.counts.active} active projects" or "your stated focus").` : ''}
 
 Do NOT:
 - Be generic ("Great work!")
 - Be sycophantic
 - End with a question (users can't reply to push notifications)
 - Write more than 2 sentences
-- Challenge or critique (save that for /next cards)
+- Challenge or critique (save that for interactive sessions)
+- Repeat information they already know
 
 Just respond with the message text, no preamble.`;
   } else {
-    // NEW REPO: Never analyzed, don't hallucinate context
-    prompt = `You are the user's cofounder. They just pushed code to ${repoName}, which I haven't seen before.
+    // NEW REPO: Never analyzed
+    prompt = `You are the user's cofounder. They just pushed code to ${repoName}, which I haven't analyzed yet.
 
 Commits:
 ${commitSummary}
 
-This is a NEW repo I haven't analyzed yet. Based ONLY on the commit messages and file names, write a brief 1-sentence acknowledgment of what they're building.
+${portfolioContext ? `Portfolio context:\n${portfolioContext}\n` : ''}
 
-End with: "Tap Analyze to start tracking this project."
+This is a NEW repo I haven't analyzed. Based ONLY on the commit messages and file names, write a brief 1-sentence acknowledgment of what they're building.
+
+${otherActiveCount > 0 ? `You may note they have ${otherActiveCount} other active project${otherActiveCount > 1 ? 's' : ''} if relevant.` : ''}
+
+End with: "Tap Analyze to track this project."
 
 Do NOT:
 - Mention "blockers", "goals", "prior analysis" or anything you don't actually know
-- Ask questions (users can't reply to push notifications)
+- Ask questions (users can't reply)
 - Be generic or sycophantic
 - Write more than 2 sentences total
+- Judge whether this is a good use of time (save that for interactive sessions)
 
 Just respond with the message text, no preamble.`;
   }
@@ -98,4 +117,3 @@ Just respond with the message text, no preamble.`;
 
   return text.text.trim();
 }
-

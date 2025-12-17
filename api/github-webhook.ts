@@ -4,6 +4,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { info, error as logErr } from '../lib/logger.js';
 import { stateManager } from '../lib/state.js';
 import { generatePushFeedback } from '../lib/ai/push-feedback.js';
+import { getPortfolioSnapshot } from '../lib/portfolio.js';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const CHAT_ID = process.env.USER_TELEGRAM_CHAT_ID!;
@@ -195,8 +196,16 @@ export default async function handler(req: Request) {
     const tracked = await stateManager.getTrackedRepo(owner, name);
     const analysis = tracked?.analysis || null;
     
+    // Get portfolio snapshot for context
+    const portfolio = await getPortfolioSnapshot();
+    
     // Generate AI feedback
-    info('webhook.push', 'Generating feedback', { fullName, hasAnalysis: !!analysis });
+    info('webhook.push', 'Generating feedback', { 
+      fullName, 
+      hasAnalysis: !!analysis,
+      portfolioActive: portfolio.counts.active,
+      isFocus: portfolio.focus === fullName,
+    });
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
     
     const feedback = await generatePushFeedback(anthropic, {
@@ -209,6 +218,7 @@ export default async function handler(req: Request) {
         modified: c.modified,
       })),
       analysis,
+      portfolio,  // NEW: Pass portfolio context
     });
     
     // Format message with repo header
