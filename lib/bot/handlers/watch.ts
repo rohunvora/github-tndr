@@ -4,31 +4,42 @@ import { stateManager } from '../../state.js';
 
 /**
  * Handle /watch <repo> - enable push notifications for a repo
+ * Accepts both "name" and "owner/name" formats
  */
 export async function handleWatch(ctx: Context, repoInput: string): Promise<void> {
-  info('watch', 'Adding watch', { repo: repoInput });
+  info('watch', 'Starting', { repo: repoInput });
   
   try {
-    // Normalize to owner/name
     let fullName = repoInput;
-    if (!repoInput.includes('/')) {
-      // Try to find in tracked repos
+    
+    // If already in owner/name format, use directly
+    if (repoInput.includes('/')) {
+      fullName = repoInput;
+      info('watch', 'Using owner/name format directly', { fullName });
+    } else {
+      // Try to find in tracked repos by name
       const tracked = await stateManager.getTrackedRepoByName(repoInput);
-      if (!tracked) {
-        await ctx.reply(`❌ Repo "${repoInput}" not found. Run /repo ${repoInput} first.`);
+      if (tracked) {
+        fullName = `${tracked.owner}/${tracked.name}`;
+        info('watch', 'Found tracked repo', { fullName });
+      } else {
+        // Can't resolve - ask for full name
+        await ctx.reply(`❌ Repo "${repoInput}" not tracked.\n\nEither:\n• Run \`/repo ${repoInput}\` first, or\n• Use full format: \`/watch owner/${repoInput}\``, {
+          parse_mode: 'Markdown',
+        });
+        info('watch', 'Not found', { repoInput });
         return;
       }
-      fullName = `${tracked.owner}/${tracked.name}`;
     }
     
     // Add to watch list
     await stateManager.addWatchedRepo(fullName);
     
-    await ctx.reply(`👁️ Watching **${fullName}**\n\nYou'll get notified when:\n• Files from cut list are deleted\n• README changes\n• Blockers are resolved\n\nUse /unwatch ${repoInput} to stop.`, {
+    await ctx.reply(`👁️ Watching **${fullName}**\n\nYou'll get notified when:\n• Files from cut list are deleted\n• README changes\n• Blockers are resolved\n\nUse \`/unwatch ${fullName.split('/')[1]}\` to stop.`, {
       parse_mode: 'Markdown',
     });
     
-    info('watch', 'Added', { fullName });
+    info('watch', 'SUCCESS', { fullName });
     
   } catch (err) {
     logErr('watch', err, { repo: repoInput });

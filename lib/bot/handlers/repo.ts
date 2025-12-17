@@ -99,9 +99,20 @@ async function updateProgress(
 /**
  * Handle /repo command
  * Shows factual progress phases, min 5s edit interval
+ * Uses idempotency lock to prevent duplicate analyses from webhook retries
  */
 export async function handleRepo(ctx: Context, input: string): Promise<void> {
   info('repo', 'Starting', { input });
+
+  // Idempotency: check if already analyzing this repo
+  const lockKey = `analyzing:${input.toLowerCase()}`;
+  const existingLock = await stateManager.get(lockKey);
+  if (existingLock) {
+    info('repo', 'Already analyzing, skipping duplicate', { input });
+    return; // Don't send duplicate messages
+  }
+  // Set lock with 2-minute TTL (covers worst-case analysis time)
+  await stateManager.set(lockKey, 'true', 120);
 
   // Show initial progress
   const progress = await ctx.reply(formatProgressMessage(input, 'resolving'), { parse_mode: 'Markdown' });
@@ -138,6 +149,11 @@ export async function handleRepo(ctx: Context, input: string): Promise<void> {
     // Phase 4: Save & format
     const tracked = await saveTrackedRepo(owner, name, analysis, repoInfo.pushed_at);
 
+    // Auto-watch this repo for push notifications
+    const fullName = `${owner}/${name}`;
+    await stateManager.addWatchedRepo(fullName);
+    info('repo', 'Auto-watched', { fullName });
+
     // Show final result (delete progress, send card)
     await ctx.api.deleteMessage(state.chatId, state.messageId);
     const msg = await ctx.reply(formatCard(tracked), {
@@ -156,6 +172,10 @@ export async function handleRepo(ctx: Context, input: string): Promise<void> {
     } catch {
       // Message may have been deleted
     }
+  } finally {
+    // Always release the lock
+    const lockKey = `analyzing:${input.toLowerCase()}`;
+    await stateManager.delete(lockKey);
   }
 }
 

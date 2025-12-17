@@ -124,7 +124,7 @@ export default async function handler(req: Request) {
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
   }
-  
+
   const event = req.headers.get('X-GitHub-Event');
   const deliveryId = req.headers.get('X-GitHub-Delivery');
   const signature = req.headers.get('X-Hub-Signature-256');
@@ -165,8 +165,8 @@ export default async function handler(req: Request) {
     if (!isWatched) {
       info('webhook.push', 'Repo not watched', { fullName });
       return new Response(JSON.stringify({ ok: true, skipped: 'not watched' }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
+                  headers: { 'Content-Type': 'application/json' },
+                });
     }
     
     // Check if muted
@@ -174,9 +174,9 @@ export default async function handler(req: Request) {
     if (isMuted) {
       info('webhook.push', 'Repo muted', { fullName });
       return new Response(JSON.stringify({ ok: true, skipped: 'muted' }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
     
     // Idempotency check
     if (headSha) {

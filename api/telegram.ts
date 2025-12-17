@@ -167,7 +167,8 @@ bot.command('repo', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
   const input = (ctx.message?.text || '').replace('/repo', '').trim();
   if (!input) { await ctx.reply('Usage: /repo <name> or /repo owner/name'); return; }
-  await handleRepo(ctx, input);
+  // Fire-and-forget: don't await, respond to webhook fast
+  handleRepo(ctx, input).catch(err => logErr('repo', err, { input }));
 });
 
 bot.command('watch', async (ctx) => {
@@ -312,7 +313,7 @@ bot.on('callback_query:data', async (ctx) => {
   const action = parts[0];
   
   info('cb', action, { data: data.substring(0, 50) });
-
+  
   // Session-based card actions: action:sessionId:version
   // Note: 'back' handled separately below (can be session or repo)
   const sessionActions = ['do', 'skip', 'deep', 'ship', 'shipok', 'done', 'dostep'];
@@ -498,36 +499,36 @@ bot.on('callback_query:data', async (ctx) => {
 
 // Session-based card action handler
 async function handleSessionAction(ctx: Context, action: string, parts: string[]): Promise<void> {
-  const sessionId = parts[1];
-  const version = parseInt(parts[2], 10);
-  
-  const session = await getCardSession(sessionId);
-  if (!session) {
+    const sessionId = parts[1];
+    const version = parseInt(parts[2], 10);
+    
+    const session = await getCardSession(sessionId);
+    if (!session) {
     await ctx.answerCallbackQuery({ text: 'Session expired. /next' });
-    return;
-  }
-  
-  if (session.version !== version) {
+      return;
+    }
+    
+    if (session.version !== version) {
     await ctx.answerCallbackQuery({ text: 'Outdated. Card changed.' });
-    return;
-  }
-  
+      return;
+    }
+    
   const messageId = ctx.callbackQuery?.message?.message_id;
-  const chatIdNum = ctx.chat?.id;
-  if (!messageId || !chatIdNum) {
+    const chatIdNum = ctx.chat?.id;
+    if (!messageId || !chatIdNum) {
     await ctx.answerCallbackQuery({ text: 'Error' });
-    return;
-  }
-  
-  const card = session.card;
-  const [owner, name] = card.full_name.split('/');
-  
-  switch (action) {
+      return;
+    }
+    
+    const card = session.card;
+    const [owner, name] = card.full_name.split('/');
+    
+    switch (action) {
     case 'skip': {
       await markCardSkipped(card.full_name);
-      await showTyping(ctx);
-      
-      try {
+        await showTyping(ctx);
+        
+        try {
         const repos = await stateManager.getAllTrackedRepos();
         const nextCard = await getNextCard(getAnthropic(), getGitHub(), repos);
         
@@ -555,150 +556,150 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
     case 'deep': {
       await showTyping(ctx);
       try {
-        const [readme, fileTree] = await Promise.all([
-          getGitHub().getFileContent(owner, name, 'README.md'),
-          getGitHub().getRepoTree(owner, name, 30),
-        ]);
-        
-        const deepDive = await generateDeepDive(getAnthropic(), {
-          repo_card: card,
-          readme_excerpt: readme || undefined,
-          file_tree: fileTree,
-        });
-        
-        const deployUrl = card.stage === 'ready_to_launch' || card.stage === 'post_launch' 
+          const [readme, fileTree] = await Promise.all([
+            getGitHub().getFileContent(owner, name, 'README.md'),
+            getGitHub().getRepoTree(owner, name, 30),
+          ]);
+          
+          const deepDive = await generateDeepDive(getAnthropic(), {
+            repo_card: card,
+            readme_excerpt: readme || undefined,
+            file_tree: fileTree,
+          });
+          
+          const deployUrl = card.stage === 'ready_to_launch' || card.stage === 'post_launch' 
           ? `https://${name}.vercel.app` : null;
-        
-        const newSession = await updateCardSession(sessionId, { view: 'deep' });
+          
+          const newSession = await updateCardSession(sessionId, { view: 'deep' });
         await ctx.api.editMessageText(chatIdNum, messageId, formatDeepDiveMessage(deepDive, name, deployUrl), {
-          parse_mode: 'Markdown',
-          reply_markup: deepDiveKeyboard(sessionId, newSession!.version),
+              parse_mode: 'Markdown', 
+              reply_markup: deepDiveKeyboard(sessionId, newSession!.version),
         });
-        await ctx.answerCallbackQuery();
+          await ctx.answerCallbackQuery();
       } catch (err) {
         logErr('cb.deep', err);
         await ctx.answerCallbackQuery({ text: 'Failed' });
-      }
-      break;
-    }
-
-    case 'back': {
-      const newSession = await updateCardSession(sessionId, { view: 'card' });
-      await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(card), {
-        parse_mode: 'Markdown',
-        reply_markup: cardKeyboard(sessionId, newSession!.version),
-      });
-      await ctx.answerCallbackQuery();
-      break;
-    }
-
-    case 'ship': {
-      const newSession = await updateCardSession(sessionId, { view: 'confirm_ship' });
-      await ctx.api.editMessageText(chatIdNum, messageId, formatShipConfirm(card.repo), {
-        parse_mode: 'Markdown',
-        reply_markup: shipConfirmKeyboard(sessionId, newSession!.version),
-      });
-      await ctx.answerCallbackQuery();
-      break;
-    }
-
-    case 'shipok': {
-      await stateManager.updateRepoState(owner, name, 'shipped');
-      await clearIntention(card.full_name);
-      await ctx.api.editMessageText(chatIdNum, messageId, formatShipped(card.repo), { parse_mode: 'Markdown' });
-      await ctx.answerCallbackQuery({ text: '🚀 Shipped!' });
-      break;
-    }
-
-    case 'do':
-    case 'dostep': {
-      await showTyping(ctx);
-      try {
-        let artifactText = '';
-        const artifactType = card.next_step.artifact.type;
-        
-        switch (artifactType) {
-          case 'cursor_prompt': {
-            const fileTree = await getGitHub().getRepoTree(owner, name, 50);
-            const readme = await getGitHub().getFileContent(owner, name, 'README.md');
-            const prompt = await generateCursorPromptArtifact(getAnthropic(), {
-              repo_name: name,
-              next_step_action: card.next_step.action,
-              target_files_candidates: fileTree,
-              readme_excerpt: readme || undefined,
-            });
-            artifactText = formatCursorPromptMessage(prompt);
-            break;
-          }
-          case 'copy': {
-            const copy = await generateCopy(getAnthropic(), {
-              potential: card.potential,
-              cta_style: 'direct_link',
-              product_url: `https://${name}.vercel.app`,
-            });
-            artifactText = formatCopyMessage(copy);
-            break;
-          }
-          case 'launch_post': {
-            const post = await generateLaunchPost(getAnthropic(), {
-              potential: card.potential,
-              product_url: `https://${name}.vercel.app`,
-              platform: 'x',
-            });
-            artifactText = formatLaunchPostMessage(post);
-            break;
-          }
-          default: {
-            artifactText = `**${card.next_step.action}**\n\n_Complete this step and tap Done._`;
-          }
         }
-        
-        await ctx.reply(artifactText, { parse_mode: 'Markdown', reply_to_message_id: messageId });
-        
+        break;
+      }
+      
+      case 'back': {
         const newSession = await updateCardSession(sessionId, { view: 'card' });
+      await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(card), {
+            parse_mode: 'Markdown', 
+            reply_markup: cardKeyboard(sessionId, newSession!.version),
+      });
+        await ctx.answerCallbackQuery();
+        break;
+      }
+      
+      case 'ship': {
+        const newSession = await updateCardSession(sessionId, { view: 'confirm_ship' });
+      await ctx.api.editMessageText(chatIdNum, messageId, formatShipConfirm(card.repo), {
+            parse_mode: 'Markdown', 
+            reply_markup: shipConfirmKeyboard(sessionId, newSession!.version),
+      });
+        await ctx.answerCallbackQuery();
+        break;
+      }
+      
+      case 'shipok': {
+        await stateManager.updateRepoState(owner, name, 'shipped');
+        await clearIntention(card.full_name);
+      await ctx.api.editMessageText(chatIdNum, messageId, formatShipped(card.repo), { parse_mode: 'Markdown' });
+        await ctx.answerCallbackQuery({ text: '🚀 Shipped!' });
+        break;
+      }
+      
+      case 'do':
+      case 'dostep': {
+        await showTyping(ctx);
+        try {
+          let artifactText = '';
+        const artifactType = card.next_step.artifact.type;
+          
+          switch (artifactType) {
+            case 'cursor_prompt': {
+              const fileTree = await getGitHub().getRepoTree(owner, name, 50);
+              const readme = await getGitHub().getFileContent(owner, name, 'README.md');
+              const prompt = await generateCursorPromptArtifact(getAnthropic(), {
+                repo_name: name,
+                next_step_action: card.next_step.action,
+                target_files_candidates: fileTree,
+                readme_excerpt: readme || undefined,
+              });
+              artifactText = formatCursorPromptMessage(prompt);
+              break;
+            }
+            case 'copy': {
+              const copy = await generateCopy(getAnthropic(), {
+                potential: card.potential,
+                cta_style: 'direct_link',
+                product_url: `https://${name}.vercel.app`,
+              });
+              artifactText = formatCopyMessage(copy);
+              break;
+            }
+            case 'launch_post': {
+              const post = await generateLaunchPost(getAnthropic(), {
+                potential: card.potential,
+                product_url: `https://${name}.vercel.app`,
+                platform: 'x',
+              });
+              artifactText = formatLaunchPostMessage(post);
+              break;
+            }
+            default: {
+            artifactText = `**${card.next_step.action}**\n\n_Complete this step and tap Done._`;
+            }
+          }
+          
+        await ctx.reply(artifactText, { parse_mode: 'Markdown', reply_to_message_id: messageId });
+          
+          const newSession = await updateCardSession(sessionId, { view: 'card' });
         await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCardWithArtifact(card), {
-          parse_mode: 'Markdown',
-          reply_markup: afterDoItKeyboard(sessionId, newSession!.version),
+              parse_mode: 'Markdown', 
+              reply_markup: afterDoItKeyboard(sessionId, newSession!.version),
         });
-        await ctx.answerCallbackQuery({ text: '⚡ Generated' });
+          await ctx.answerCallbackQuery({ text: '⚡ Generated' });
       } catch (err) {
         logErr('cb.do', err);
         await ctx.answerCallbackQuery({ text: 'Failed' });
-      }
-      break;
-    }
-
-    case 'done': {
-      await clearIntention(card.full_name);
-      await showTyping(ctx);
-      
-      try {
-        const repos = await stateManager.getAllTrackedRepos();
-        const nextCard = await getNextCard(getAnthropic(), getGitHub(), repos);
-        
-        if (!nextCard) {
-          await ctx.api.editMessageText(chatIdNum, messageId, formatNoMoreCards(), {
-            parse_mode: 'Markdown',
-            reply_markup: noMoreCardsKeyboard(),
-          });
-        } else {
-          const newSession = await createCardSession(nextCard);
-          await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(nextCard), {
-            parse_mode: 'Markdown',
-            reply_markup: cardKeyboard(newSession.id, newSession.version),
-          });
-          await markCardShown(nextCard.full_name);
         }
-        await ctx.answerCallbackQuery({ text: '✅ Done!' });
+        break;
+      }
+      
+      case 'done': {
+        await clearIntention(card.full_name);
+        await showTyping(ctx);
+      
+        try {
+          const repos = await stateManager.getAllTrackedRepos();
+          const nextCard = await getNextCard(getAnthropic(), getGitHub(), repos);
+          
+          if (!nextCard) {
+            await ctx.api.editMessageText(chatIdNum, messageId, formatNoMoreCards(), {
+              parse_mode: 'Markdown',
+              reply_markup: noMoreCardsKeyboard(),
+            });
+          } else {
+            const newSession = await createCardSession(nextCard);
+          await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(nextCard), {
+                parse_mode: 'Markdown', 
+                reply_markup: cardKeyboard(newSession.id, newSession.version),
+          });
+            await markCardShown(nextCard.full_name);
+          }
+          await ctx.answerCallbackQuery({ text: '✅ Done!' });
       } catch (err) {
         logErr('cb.done', err);
         await ctx.answerCallbackQuery({ text: 'Failed' });
+        }
+        break;
       }
-      break;
     }
   }
-}
-
+  
 // Helper keyboard for repo card view
 function repoKeyboard(repo: TrackedRepo): InlineKeyboard {
   const id = `${repo.owner}:${repo.name}`;

@@ -73,8 +73,8 @@ export function formatCard(repo: TrackedRepo): string {
     msg += `\n→ Ready to post\n`;
   } else if (a.verdict === 'no_core') {
     msg += `\n→ Find or create the core\n`;
-  }
-  
+}
+
   // Pride with blocker count
   const pride = a.pride_level || 'neutral';
   const blockerCount = a.pride_blockers?.length || 0;
