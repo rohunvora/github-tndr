@@ -1,8 +1,9 @@
 export const config = { runtime: 'edge', maxDuration: 30 };
 
+import Anthropic from '@anthropic-ai/sdk';
 import { info, error as logErr } from '../lib/logger.js';
 import { stateManager } from '../lib/state.js';
-import { analyzePush, PushAnalysisResult } from '../lib/push-analyzer.js';
+import { generatePushFeedback } from '../lib/ai/push-feedback.js';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const CHAT_ID = process.env.USER_TELEGRAM_CHAT_ID!;
@@ -24,6 +25,7 @@ interface PushEvent {
   repository: {
     full_name: string;
     default_branch: string;
+    name: string;
   };
   sender: {
     login: string;
@@ -84,58 +86,31 @@ async function sendTelegram(text: string, replyMarkup?: object): Promise<void> {
     body.reply_markup = replyMarkup;
   }
   
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Telegram error: ${err}`);
+  }
 }
 
 /**
- * Format push notification message
+ * Create keyboard for push notification
  */
-function formatPushMessage(fullName: string, result: PushAnalysisResult): string {
-  const name = fullName.split('/')[1];
-  const lines: string[] = [`⚡ **${name}** pushed\n`];
-  
-  if (result.cutFilesDeleted.length > 0) {
-    const count = result.cutFilesDeleted.length;
-    lines.push(`🗑️ Deleted ${count} file${count > 1 ? 's' : ''} from cut list`);
-    if (result.cutRemaining !== null) {
-      lines.push(`   (${result.cutRemaining} remaining)`);
-    }
-  }
-  
-  if (result.readmeChanged) {
-    lines.push(`📝 README updated`);
-  }
-  
-  if (result.blockersResolved.length > 0) {
-    lines.push(`✓ Blocker resolved: ${result.blockersResolved[0]}`);
-  }
-  
-  if (result.blockerCountChange) {
-    const { before, after } = result.blockerCountChange;
-    lines.push(`\nBlockers: ${before}→${after}`);
-  }
-  
-  return lines.join('\n');
-}
-
-/**
- * Create mute keyboard for push notification
- */
-function muteKeyboard(fullName: string) {
+function pushKeyboard(fullName: string) {
   const [owner, name] = fullName.split('/');
   return {
     inline_keyboard: [
       [
-        { text: '🔇 1d', callback_data: `mute:${owner}:${name}:1d` },
-        { text: '🔇 1w', callback_data: `mute:${owner}:${name}:1w` },
-        { text: '🔇 stop', callback_data: `mute:${owner}:${name}:forever` },
+        { text: '🔇 Mute 1d', callback_data: `mute:${owner}:${name}:1d` },
+        { text: '🔇 Mute 1w', callback_data: `mute:${owner}:${name}:1w` },
       ],
       [
-        { text: '🔄 Re-analyze', callback_data: `reanalyze:${owner}:${name}` },
+        { text: '📋 Analyze', callback_data: `reanalyze:${owner}:${name}` },
       ],
     ],
   };
@@ -147,7 +122,6 @@ export default async function handler(req: Request) {
   }
 
   const event = req.headers.get('X-GitHub-Event');
-  const deliveryId = req.headers.get('X-GitHub-Delivery');
   const signature = req.headers.get('X-Hub-Signature-256');
   
   // Only handle push events
@@ -168,26 +142,31 @@ export default async function handler(req: Request) {
   try {
     const push: PushEvent = JSON.parse(payload);
     const fullName = push.repository.full_name;
+    const repoName = push.repository.name;
     const headSha = push.head_commit?.id || push.commits[0]?.id;
     
-    info('webhook.push', 'Received', { fullName, ref: push.ref, sha: headSha?.slice(0, 7) });
+    info('webhook.push', 'Received', { 
+      fullName, 
+      ref: push.ref, 
+      sha: headSha?.slice(0, 7),
+      commits: push.commits.length,
+    });
     
-    // Check if this is the default branch
+    // Only process default branch pushes
     const defaultBranch = `refs/heads/${push.repository.default_branch}`;
     if (push.ref !== defaultBranch) {
-      info('webhook.push', 'Skipping non-default branch', { ref: push.ref, default: defaultBranch });
+      info('webhook.push', 'Skipping non-default branch', { ref: push.ref });
       return new Response(JSON.stringify({ ok: true, skipped: 'not default branch' }), {
         headers: { 'Content-Type': 'application/json' },
       });
     }
     
-    // Check if repo is watched
-    const isWatched = await stateManager.isRepoWatched(fullName);
-    if (!isWatched) {
-      info('webhook.push', 'Repo not watched', { fullName });
-      return new Response(JSON.stringify({ ok: true, skipped: 'not watched' }), {
-                  headers: { 'Content-Type': 'application/json' },
-                });
+    // Skip empty pushes (e.g., branch creation with no commits)
+    if (push.commits.length === 0) {
+      info('webhook.push', 'No commits', { fullName });
+      return new Response(JSON.stringify({ ok: true, skipped: 'no commits' }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
     
     // Check if muted
@@ -195,15 +174,15 @@ export default async function handler(req: Request) {
     if (isMuted) {
       info('webhook.push', 'Repo muted', { fullName });
       return new Response(JSON.stringify({ ok: true, skipped: 'muted' }), {
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
     
     // Idempotency check
     if (headSha) {
       const lastSha = await stateManager.getLastProcessedSha(fullName);
       if (lastSha === headSha) {
-        info('webhook.push', 'Duplicate delivery', { fullName, sha: headSha.slice(0, 7) });
+        info('webhook.push', 'Duplicate', { fullName, sha: headSha.slice(0, 7) });
         return new Response(JSON.stringify({ ok: true, skipped: 'duplicate' }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -211,31 +190,33 @@ export default async function handler(req: Request) {
       await stateManager.setLastProcessedSha(fullName, headSha);
     }
     
-    // Get tracked repo for analysis context
+    // Get tracked repo for context (optional - we notify even without it)
     const [owner, name] = fullName.split('/');
     const tracked = await stateManager.getTrackedRepo(owner, name);
-    if (!tracked?.analysis) {
-      info('webhook.push', 'No analysis for repo', { fullName });
-      return new Response(JSON.stringify({ ok: true, skipped: 'no analysis' }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
+    const analysis = tracked?.analysis || null;
     
-    // Analyze the push
-    const result = analyzePush(push.commits, tracked.analysis);
+    // Generate AI feedback
+    info('webhook.push', 'Generating feedback', { fullName, hasAnalysis: !!analysis });
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
     
-    // Only notify if meaningful
-    if (!result.meaningful) {
-      info('webhook.push', 'Not meaningful', { fullName });
-      return new Response(JSON.stringify({ ok: true, skipped: 'not meaningful' }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
+    const feedback = await generatePushFeedback(anthropic, {
+      repoName,
+      fullName,
+      commits: push.commits.map(c => ({
+        message: c.message,
+        added: c.added,
+        removed: c.removed,
+        modified: c.modified,
+      })),
+      analysis,
+    });
+    
+    // Format message with repo header
+    const message = `⚡ **${repoName}**\n\n${feedback}`;
     
     // Send notification
-    info('webhook.push', 'Sending notification', { fullName, result });
-    const message = formatPushMessage(fullName, result);
-    await sendTelegram(message, muteKeyboard(fullName));
+    info('webhook.push', 'Sending', { fullName, feedbackLength: feedback.length });
+    await sendTelegram(message, pushKeyboard(fullName));
     
     return new Response(JSON.stringify({ ok: true, notified: true }), {
       headers: { 'Content-Type': 'application/json' },
