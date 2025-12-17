@@ -198,47 +198,7 @@ if (!session) {
 
 ---
 
-### 2.3 Consolidate Morning Stack Messages
-
-**Problem:** Morning stack sends 3-5 separate messages at 9am. Feels spammy.
-
-**Solution:** Send one consolidated message with top 3 cards inline.
-
-**Current:**
-```
-Message 1: ☀️ Good morning! Here's your stack...
-Message 2: [Photo + Card 1 details]
-Message 3: Card 2 compact
-Message 4: Card 3 compact
-Message 5: Tap "Start First Card"...
-```
-
-**New:**
-```
-☀️ Good morning! Here's your stack:
-
-1. **github-tndr** — 🚀 Ready
-   _Next: Write launch post_
-
-2. **side-project** — 🔨 Building
-   _Next: Fix auth flow_
-
-3. **another-one** — 📦 Packaging
-   _Next: Add demo GIF_
-
-[Start #1] [Skip Today]
-```
-
-**Files to change:**
-| File | Change |
-|------|--------|
-| `api/cron/morning-stack.ts` | Consolidate into single message |
-| `lib/bot/format.ts` | Add `formatMorningStack(cards[])` |
-| `lib/bot/keyboards.ts` | Add `morningStackKeyboardV2()` |
-
----
-
-### 2.4 Button Mashing Protection (Idempotency)
+### 2.3 Button Mashing Protection (Idempotency)
 
 **Problem:** Users tap buttons multiple times. "Do it" triggers AI generation — what if they tap 3x?
 
@@ -277,9 +237,8 @@ try {
 | 3 | Graceful session expiration | 1.5h | High |
 | 4 | Button mashing protection | 30m | Medium |
 | 5 | Streaming progress for scan | 1.5h | Medium |
-| 6 | Consolidate morning stack | 1h | Medium |
 
-**Total: ~7 hours**
+**Total: ~6 hours**
 
 **Order rationale:**
 1. Quick win, removes broken links immediately
@@ -287,7 +246,6 @@ try {
 3. Fixes frustrating dead ends
 4. Prevents duplicate work from eager users
 5. Applies streaming pattern to scan
-6. Reduces notification noise
 
 ---
 
@@ -306,12 +264,7 @@ Before shipping each change, verify:
 - [ ] Recovery shows fresh data, not stale
 - [ ] Non-existent repo shows helpful error
 
-**For morning stack (2.3):**
-- [ ] Single message, not multiple
-- [ ] Buttons work correctly
-- [ ] Empty state handled (no repos)
-
-**For idempotency (2.4):**
+**For idempotency (2.3):**
 - [ ] Double-tap doesn't trigger duplicate work
 - [ ] Lock releases after completion
 - [ ] Lock releases on error
@@ -325,8 +278,7 @@ After implementation:
 1. **No mystery waits** — User always knows what's happening during AI calls
 2. **No dead ends** — Expired sessions recover gracefully
 3. **No broken links** — Live URLs only shown when actually live
-4. **Calm mornings** — One consolidated notification, not 5
-5. **No duplicate work** — Button mashing is handled
+4. **No duplicate work** — Button mashing is handled
 
 ---
 

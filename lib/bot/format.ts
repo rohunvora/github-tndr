@@ -335,25 +335,6 @@ export const formatAnalysis = formatCard;
 
 // ============ MORNING STACK ============
 
-/**
- * Consolidated morning stack - one message instead of 3-5
- */
-export function formatMorningStack(cards: RepoCard[]): string {
-  const lines: string[] = [];
-
-  lines.push(`☀️ **Good morning!** Here's your stack:`);
-  lines.push('');
-
-  cards.forEach((card, i) => {
-    const num = i + 1;
-    lines.push(`${num}. **${card.repo}** — ${stageLabel(card.stage)}`);
-    lines.push(`   _Next: ${card.next_step.action}_`);
-    if (i < cards.length - 1) lines.push('');
-  });
-
-  return lines.join('\n');
-}
-
 // ============ CURSOR PROMPT ============
 
 export function formatCursorPrompt(repo: TrackedRepo): string {

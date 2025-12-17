@@ -191,15 +191,6 @@ export function noMoreCardsKeyboard(): InlineKeyboard {
 }
 
 /**
- * Keyboard for morning stack
- */
-export function morningStackKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
-    .text('⚡ Start First Card', 'card_next')
-    .text('📋 View All', 'listall');
-}
-
-/**
  * Keyboard for intention confirmation
  */
 export function intentionConfirmKeyboard(fullName: string, action: string): InlineKeyboard {

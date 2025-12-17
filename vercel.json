@@ -1,8 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/cron/morning-stack",
-      "schedule": "0 9 * * *"
-    }
-  ]
-}
+{}
