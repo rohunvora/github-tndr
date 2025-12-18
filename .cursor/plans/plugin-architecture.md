@@ -1,58 +1,87 @@
 # Plugin Architecture Plan
 
-> Status: **PLANNING** — Finalizing tool list before implementation
+> Status: **READY TO BUILD** — Tool list finalized
 
 ## Overview
 
-Restructure the codebase into a plugin-based architecture where all tools (GitHub repo analysis, chart analysis, AI generation, watch system) are isolated modules with standard interfaces, enabling bidirectional sync with external repos (like bel-rtr) and easy addition/removal of capabilities.
+Restructure the codebase into a plugin-based architecture with **6 focused tools**. Each tool is isolated so you can tweak one without breaking others. Chart analysis syncs bidirectionally with bel-rtr.
 
-## Current State
+## Final Tool List
 
-Everything lives in a flat structure with tight coupling. The 1000+ line `api/telegram.ts` imports directly from scattered modules.
+### 📊 Analysis Tools
 
-```
-lib/
-├── analyzer.ts          # Repo analysis
-├── github.ts            # GitHub API
-├── chart/               # Chart analysis (from bel-rtr)
-├── ai/                  # AI generation functions
-├── bot/handlers/        # Telegram handlers
-├── card-generator.ts    # Card/feed system
-├── nano-banana.ts       # Cover image generation
-├── screenshot.ts        # Website screenshots
-├── readme-generator.ts  # README generation
-└── ...
-```
+| Tool | Trigger | Description |
+|------|---------|-------------|
+| **repo** | `/repo <name>` | Analyze GitHub repo (ship/cut/kill verdict) |
+| **chart** | Send any photo | Detect chart, analyze levels, annotate zones |
+| **scan** | `/scan` | Batch analyze all your repos |
 
-## Proposed Architecture
+### 🎨 Generation Tools
+
+| Tool | Trigger | Description |
+|------|---------|-------------|
+| **preview** | `/preview <repo>` | Generate cover image → approve/regen → add to README header |
+| **readme** | `/readme <repo>` | Generate/optimize README |
+
+### 🎴 Feed Tools
+
+| Tool | Trigger | Description |
+|------|---------|-------------|
+| **next** | `/next` | Carousel of active projects with preview cards. Scrub through with ← → buttons to pick what to work on |
+
+**Total: 6 commands** (plus photo detection for charts)
+
+---
+
+## Architecture
 
 ```
 lib/
 ├── core/                    # Shared infrastructure
-│   ├── config.ts
-│   ├── logger.ts
-│   ├── state.ts
-│   └── types.ts
+│   ├── config.ts            # AI providers, env vars
+│   ├── github.ts            # GitHub API client
+│   ├── state.ts             # Vercel KV state
+│   ├── logger.ts            # Logging
+│   └── types.ts             # Shared types
 │
 └── tools/                   # Each tool is isolated
-    ├── types.ts             # Tool interface definition
-    ├── registry.ts          # Auto-discovery & routing
+    ├── types.ts             # Tool interface
+    ├── registry.ts          # Auto-wires tools to bot
     │
-    ├── repo/                # GitHub repo analysis
-    ├── chart/               # Chart analysis (syncs with bel-rtr)
-    ├── cover/               # Cover image generation
-    ├── screenshot/          # Website screenshots
-    ├── readme/              # README generation
-    ├── cursor-prompt/       # Cursor prompt generation
-    ├── copy/                # Marketing copy generation
-    ├── launch-post/         # Launch post generation
-    ├── deep-dive/           # Project deep dive
-    ├── watch/               # Push notification system
-    ├── cards/               # Card/feed system
-    └── push-feedback/       # AI feedback on pushes
+    ├── repo/                # /repo - GitHub analysis
+    │   ├── index.ts         # Tool definition
+    │   ├── analyzer.ts      # Analysis logic
+    │   ├── prompts.ts       # AI prompts
+    │   └── format.ts        # Telegram formatting
+    │
+    ├── chart/               # Photo → chart analysis
+    │   ├── index.ts         # Tool definition
+    │   ├── analysis.ts      # Core logic (SYNCS with bel-rtr)
+    │   ├── annotate.ts      # Image annotation (SYNCS)
+    │   ├── types.ts         # Types (SYNCS)
+    │   └── format.ts        # Telegram formatting (local)
+    │
+    ├── scan/                # /scan - batch analysis
+    │   ├── index.ts
+    │   └── handler.ts
+    │
+    ├── preview/             # /preview - cover image
+    │   ├── index.ts
+    │   ├── generator.ts     # Gemini image gen
+    │   └── github-upload.ts # Add to README
+    │
+    ├── readme/              # /readme - README gen
+    │   ├── index.ts
+    │   └── generator.ts
+    │
+    └── next/                # /next - project carousel
+        ├── index.ts
+        ├── selector.ts      # Pick best projects
+        ├── cards.ts         # Card generation
+        └── format.ts        # Carousel UI
 ```
 
-## Proposed Tool Interface
+## Tool Interface
 
 ```typescript
 interface Tool {
@@ -60,94 +89,90 @@ interface Tool {
   version: string;
   description: string;
   
-  // Telegram integration
-  commands?: ToolCommand[];        // /repo, /chart, /cover
-  messageHandlers?: MessageHandler[]; // photo, document
-  callbackHandlers?: CallbackHandler[]; // button callbacks
-  
-  // Dependencies
-  requires?: string[];  // Other tool names this depends on
+  // What triggers this tool
+  commands?: ToolCommand[];         // /repo, /preview, etc.
+  messageHandlers?: MessageHandler[]; // photo detection
+  callbackHandlers?: CallbackHandler[]; // button presses
   
   // Lifecycle
   init?: () => Promise<void>;
-  shutdown?: () => Promise<void>;
+}
+
+interface ToolCommand {
+  name: string;           // "repo", "preview"
+  description: string;    // For /help
+  handler: (ctx, args) => Promise<void>;
 }
 ```
 
-## Complete Tool Inventory
+## `/next` Carousel UX
 
-### Analysis Tools
-| Tool | Command | Description |
-|------|---------|-------------|
-| **repo** | `/repo <name>` | Analyze GitHub repo, give ship/cut/kill verdict |
-| **chart** | Send photo | Analyze chart images, identify zones, annotate |
-| **scan** | `/scan` | Batch scan all user's repos |
+```
+┌──────────────────────────────────────┐
+│  🔥 github-tndr                      │
+│                                      │
+│  High momentum · 3 commits today     │
+│  "Chart analysis working, plugin     │
+│   refactor planned for tomorrow"     │
+│                                      │
+│  [← Prev]  [🎯 Work on this]  [Next →]│
+└──────────────────────────────────────┘
+```
 
-### Generation Tools
-| Tool | Command | Description |
-|------|---------|-------------|
-| **cover** | `/cover <name>` | Generate Gemini 3 Pro cover image |
-| **screenshot** | `/screenshot <url>` | Take screenshot of any URL |
-| **readme** | `/readme <name>` | Generate/optimize README |
-| **cursor-prompt** | `/cursor <name>` | Generate Cursor prompt for next step |
-| **copy** | `/copy <name>` | Generate marketing copy |
-| **launch-post** | `/launch <name>` | Generate launch post (X/LinkedIn) |
+- Shows preview card with context
+- ← → buttons to scrub through candidates
+- "Work on this" locks in your choice
 
-### Context Tools
-| Tool | Command | Description |
-|------|---------|-------------|
-| **deep-dive** | `/dive <name>` | Restore context + 3 actionable next steps |
+## `/preview` Flow
 
-### Notification Tools
-| Tool | Command | Description |
-|------|---------|-------------|
-| **watch** | `/watch`, `/unwatch`, `/watching` | Push notification subscriptions |
-| **push-feedback** | GitHub webhook | AI feedback on meaningful pushes |
+```
+You: /preview github-tndr
 
-### Feed Tools
-| Tool | Command | Description |
-|------|---------|-------------|
-| **cards** | `/next`, `/skip` | Swipe through repos with AI cards |
+Bot: 🎨 Generating cover...
 
-## External Repo Sync
+Bot: [shows generated image]
+     "github-tndr cover"
+     [✅ Use this] [🔄 Regenerate] [❌ Cancel]
 
-The `chart/` tool will have bidirectional sync with the `bel-rtr` repo:
+You: [✅ Use this]
+
+Bot: ✅ Added to README header
+     → github.com/satoshi/github-tndr
+```
+
+## External Repo Sync (chart ↔ bel-rtr)
 
 | github-tndr | bel-rtr | Synced? |
 |-------------|---------|---------|
-| `lib/tools/chart/analysis.ts` | `lib/analysis.ts` | ✅ Yes |
-| `lib/tools/chart/annotate.ts` | `lib/annotate.ts` | ✅ Yes |
-| `lib/tools/chart/types.ts` | `lib/types.ts` | ✅ Yes |
-| `lib/tools/chart/handler.ts` | — | ❌ Local only |
+| `lib/tools/chart/analysis.ts` | `lib/analysis.ts` | ✅ |
+| `lib/tools/chart/annotate.ts` | `lib/annotate.ts` | ✅ |
+| `lib/tools/chart/types.ts` | `lib/types.ts` | ✅ |
+| `lib/tools/chart/format.ts` | — | ❌ Local |
 
-GitHub Actions workflows will automatically create PRs when synced files change in either repo.
+GitHub Actions auto-creates PRs when synced files change.
 
 ## Implementation Phases
 
 ### Phase 1: Core Infrastructure
-- [ ] Create `lib/core/` with shared infrastructure
+- [ ] Extract `lib/core/` (config, github, state, logger, types)
 - [ ] Create `lib/tools/types.ts` with Tool interface
-- [ ] Create `lib/tools/registry.ts` with routing logic
+- [ ] Create `lib/tools/registry.ts` with routing
 
-### Phase 2: Migrate Existing Features
-- [ ] Migrate `watch` (standalone, no deps)
-- [ ] Migrate `chart` (standalone, external sync)
-- [ ] Migrate `repo` (core feature)
-- [ ] Migrate `ai` tools (cursor, copy, launch, deep-dive)
-- [ ] Migrate `cards` (depends on repo)
+### Phase 2: Migrate Tools (one at a time)
+- [ ] `chart/` — already exists, just restructure
+- [ ] `repo/` — extract from current handlers
+- [ ] `scan/` — extract from telegram.ts
+- [ ] `preview/` — extract from nano-banana.ts
+- [ ] `readme/` — extract from readme-generator.ts
+- [ ] `next/` — extract from card-generator.ts, add carousel UX
 
-### Phase 3: Refactor Telegram Router
-- [ ] Slim down `api/telegram.ts` to ~200 lines
-- [ ] Use registry for all command/callback routing
+### Phase 3: Slim Down Router
+- [ ] Refactor `api/telegram.ts` to ~100 lines
+- [ ] All logic delegates to tool registry
 
-### Phase 4: Set Up Sync Workflows
-- [ ] Create `.github/workflows/sync-to-bel-rtr.yml`
-- [ ] Create mirror workflow in bel-rtr
-- [ ] Set up `CROSS_REPO_PAT` secret
-
-## Next Steps
-
-**Before implementation:** Review and finalize the tool list above. Some tools may be cut, renamed, or consolidated.
+### Phase 4: Sync Workflows
+- [ ] `.github/workflows/sync-to-bel-rtr.yml`
+- [ ] Mirror workflow in bel-rtr repo
 
 ---
 
