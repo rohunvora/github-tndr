@@ -54,3 +54,4 @@ export async function reanalyzeRepo(
     await ctx.reply(`❌ ${label} failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
+

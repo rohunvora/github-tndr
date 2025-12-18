@@ -14,6 +14,21 @@
 
 Stop letting half-finished projects rot in your GitHub. This bot scans your repositories, identifies what's actually valuable, and gives you brutally honest recommendations: ship it as-is, cut to the core feature, or kill it entirely. Get paste-ready refactoring prompts and launch-ready tweets when you're done.
 
+## Current Status
+
+**Working Now:**
+- ✅ GitHub repo analysis with ship/cut/kill verdicts
+- ✅ Chart image analysis with zone detection (bel-rtr integration)
+- ✅ Cover image generation (Gemini 3 Pro)
+- ✅ Push notifications for watched repos
+- ✅ AI-generated Cursor prompts, copy, and launch posts
+- ✅ Swipe-based card feed for daily task selection
+
+**Up Next:** [Plugin Architecture Refactor](.cursor/plans/plugin-architecture.md)
+- Restructure into isolated, modular tools
+- Add new commands (`/cover`, `/screenshot`, `/readme`, `/dive`)
+- Set up bidirectional sync with external repos (bel-rtr)
+
 ## What It Does
 
 - **Scans your GitHub repos** from the last N days and analyzes each one
@@ -22,15 +37,20 @@ Stop letting half-finished projects rot in your GitHub. This bot scans your repo
 - **Generates Cursor prompts** with specific files to delete and acceptance criteria
 - **Drafts launch tweets** when you mark projects as shipped
 - **Tracks project states** so nothing falls through the cracks
+- **Analyzes chart images** — send any chart photo to get key zones and annotations
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/scan` | Analyze repos from last 10 days |
-| `/scan 30` | Analyze repos from last 30 days |
+| `/repo <name>` | Analyze a specific GitHub repo |
+| `/scan` | Batch analyze repos from last 10 days |
+| `/next` | Get your next task card |
 | `/status` | See counts by state (ready, dead, shipped, etc.) |
-| `/repo <name>` | Deep dive analysis on specific repo |
+| `/watch <name>` | Watch repo for meaningful pushes |
+| `/unwatch <name>` | Stop watching a repo |
+| `/watching` | List all watched repos |
+| **Send photo** | Analyze chart image for key zones |
 
 ## How It Works
 
@@ -132,9 +152,9 @@ flowchart LR
 
 - **Runtime**: Node.js + TypeScript
 - **Bot Framework**: Grammy (Telegram Bot API)
-- **AI**: Anthropic Claude
+- **AI**: Anthropic Claude (analysis, prompts) + Google Gemini (vision, image gen)
 - **Database**: Vercel KV (Redis)
-- **Deployment**: Vercel serverless functions
+- **Deployment**: Vercel Edge Functions
 - **GitHub API**: REST API for repo analysis
 
 ## What This Isn't

@@ -373,11 +373,11 @@ export function stageLabel(stage: ProjectStage): string {
 
 export function formatRepoCard(card: RepoCard): string {
   const lines: string[] = [];
-
+  
   if (card.cover_image_url) {
     lines.push(`[​](${card.cover_image_url})`);
   }
-
+  
   // Only show live link if homepage is set in GitHub repo settings
   if (card.homepage) {
     lines.push(`**${card.repo}** ${stageLabel(card.stage)} • [live](${card.homepage})`);
@@ -508,6 +508,6 @@ export function formatCardError(error: string, repoName?: string): string {
 
   lines.push('');
   lines.push(`_${error}_`);
-
+  
   return lines.join('\n');
 }

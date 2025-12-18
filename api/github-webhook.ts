@@ -1,7 +1,7 @@
 export const config = { runtime: 'edge', maxDuration: 30 };
 
-import Anthropic from '@anthropic-ai/sdk';
 import { info, error as logErr } from '../lib/logger.js';
+import { getAnthropicClient } from '../lib/config.js';
 import { stateManager } from '../lib/state.js';
 import { generatePushFeedback } from '../lib/ai/push-feedback.js';
 import { getPortfolioSnapshot } from '../lib/portfolio.js';
@@ -63,7 +63,7 @@ async function verifySignature(payload: string, signature: string | null): Promi
   const digest = Array.from(new Uint8Array(signatureBytes))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
-  
+
   // Timing-safe comparison
   if (sig.length !== digest.length) return false;
   let result = 0;
@@ -133,7 +133,7 @@ export default async function handler(req: Request) {
   }
   
   const payload = await req.text();
-  
+          
   // Verify signature
   if (!await verifySignature(payload, signature)) {
     info('webhook', 'Invalid signature');
@@ -166,8 +166,8 @@ export default async function handler(req: Request) {
     if (push.commits.length === 0) {
       info('webhook.push', 'No commits', { fullName });
       return new Response(JSON.stringify({ ok: true, skipped: 'no commits' }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
+                  headers: { 'Content-Type': 'application/json' },
+                });
     }
     
     // Check if muted
@@ -175,9 +175,9 @@ export default async function handler(req: Request) {
     if (isMuted) {
       info('webhook.push', 'Repo muted', { fullName });
       return new Response(JSON.stringify({ ok: true, skipped: 'muted' }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
     
     // Idempotency check
     if (headSha) {
@@ -206,7 +206,7 @@ export default async function handler(req: Request) {
       portfolioActive: portfolio.counts.active,
       isFocus: portfolio.focus === fullName,
     });
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+    const anthropic = getAnthropicClient();
     
     const feedback = await generatePushFeedback(anthropic, {
       repoName,

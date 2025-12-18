@@ -3,7 +3,6 @@ export const config = { runtime: 'edge', maxDuration: 60 };
 import { Bot, InlineKeyboard, Context, InputFile } from 'grammy';
 import { kv } from '@vercel/kv';
 import type { Update, UserFromGetMe } from 'grammy/types';
-import Anthropic from '@anthropic-ai/sdk';
 import { info, error as logErr } from '../lib/logger.js';
 import { RepoAnalyzer } from '../lib/analyzer.js';
 import { stateManager } from '../lib/state.js';
@@ -35,6 +34,13 @@ import {
   generateLaunchPost, formatLaunchPostMessage,
   generateDeepDive, formatDeepDiveMessage,
 } from '../lib/ai/index.js';
+import {
+  analyzeChart,
+  annotateChart,
+  formatChartCaption,
+  formatChartError,
+} from '../lib/chart/index.js';
+import { getAnthropicClient } from '../lib/config.js';
 
 // ============ SETUP ============
 
@@ -45,7 +51,6 @@ const chatId = process.env.USER_TELEGRAM_CHAT_ID!.trim();
 
 let analyzer: RepoAnalyzer | null = null;
 let github: GitHubClient | null = null;
-let anthropic: Anthropic | null = null;
 
 function getBotInfo(token: string): UserFromGetMe {
   return {
@@ -63,11 +68,6 @@ function getAnalyzer(): RepoAnalyzer {
 function getGitHub(): GitHubClient {
   if (!github) github = new GitHubClient(process.env.GITHUB_TOKEN!);
   return github;
-}
-
-function getAnthropic(): Anthropic {
-  if (!anthropic) anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
-  return anthropic;
 }
 
 async function showTyping(ctx: Context): Promise<void> {
@@ -99,7 +99,10 @@ bot.command('help', async (ctx) => {
 /watch <repo> — Get push notifications
 /unwatch <repo> — Stop notifications
 /watching — List watched repos
-/cancel — Cancel running scan`, { parse_mode: 'Markdown' });
+/cancel — Cancel running scan
+
+**Chart Analysis**
+Send a chart screenshot → get TA with key zones, scenarios, and invalidation`, { parse_mode: 'Markdown' });
 });
 
 bot.command('next', async (ctx) => {
@@ -130,7 +133,7 @@ bot.command('next', async (ctx) => {
       } catch { /* rate limit or unchanged text */ }
     };
 
-    const card = await getNextCard(getAnthropic(), getGitHub(), repos, onProgress);
+    const card = await getNextCard(getAnthropicClient(), getGitHub(), repos, onProgress);
     if (!card) {
       await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatNoMoreCards(), {
         parse_mode: 'Markdown',
@@ -512,7 +515,7 @@ bot.on('callback_query:data', async (ctx) => {
         }
       };
 
-      const card = await getNextCard(getAnthropic(), getGitHub(), repos, onProgress);
+      const card = await getNextCard(getAnthropicClient(), getGitHub(), repos, onProgress);
       if (!card) {
         if (messageId && chatIdNum) {
           await ctx.api.editMessageText(chatIdNum, messageId, formatNoMoreCards(), {
@@ -681,7 +684,7 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
         if (repo) {
           try {
             await ctx.api.editMessageText(chatIdNum, messageId, '🔄 Session expired — refreshing...', { parse_mode: 'Markdown' });
-            const card = await generateCard(getAnthropic(), getGitHub(), repo);
+            const card = await generateCard(getAnthropicClient(), getGitHub(), repo);
             session = await createCardSession(card);
             await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(card), {
               parse_mode: 'Markdown',
@@ -733,7 +736,7 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
         
         try {
         const repos = await stateManager.getAllTrackedRepos();
-        const nextCard = await getNextCard(getAnthropic(), getGitHub(), repos);
+        const nextCard = await getNextCard(getAnthropicClient(), getGitHub(), repos);
         
         if (!nextCard) {
           await ctx.api.editMessageText(chatIdNum, messageId, formatNoMoreCards(), {
@@ -764,7 +767,7 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
             getGitHub().getRepoTree(owner, name, 30),
           ]);
           
-          const deepDive = await generateDeepDive(getAnthropic(), {
+          const deepDive = await generateDeepDive(getAnthropicClient(), {
             repo_card: card,
             readme_excerpt: readme || undefined,
             file_tree: fileTree,
@@ -825,7 +828,7 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
             case 'cursor_prompt': {
               const fileTree = await getGitHub().getRepoTree(owner, name, 50);
               const readme = await getGitHub().getFileContent(owner, name, 'README.md');
-              const prompt = await generateCursorPromptArtifact(getAnthropic(), {
+              const prompt = await generateCursorPromptArtifact(getAnthropicClient(), {
                 repo_name: name,
                 next_step_action: card.next_step.action,
                 target_files_candidates: fileTree,
@@ -835,7 +838,7 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
               break;
             }
             case 'copy': {
-              const copy = await generateCopy(getAnthropic(), {
+              const copy = await generateCopy(getAnthropicClient(), {
                 potential: card.potential,
                 cta_style: 'direct_link',
                 product_url: `https://${name}.vercel.app`,
@@ -844,7 +847,7 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
               break;
             }
             case 'launch_post': {
-              const post = await generateLaunchPost(getAnthropic(), {
+              const post = await generateLaunchPost(getAnthropicClient(), {
                 potential: card.potential,
                 product_url: `https://${name}.vercel.app`,
                 platform: 'x',
@@ -878,7 +881,7 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
       
         try {
           const repos = await stateManager.getAllTrackedRepos();
-          const nextCard = await getNextCard(getAnthropic(), getGitHub(), repos);
+          const nextCard = await getNextCard(getAnthropicClient(), getGitHub(), repos);
           
           if (!nextCard) {
             await ctx.api.editMessageText(chatIdNum, messageId, formatNoMoreCards(), {
@@ -926,6 +929,107 @@ function repoKeyboard(repo: TrackedRepo): InlineKeyboard {
 
   return kb;
 }
+
+// ============ PHOTO HANDLER (Chart Analysis) ============
+
+bot.on('message:photo', async (ctx) => {
+  if (ctx.from?.id.toString() !== chatId) return;
+  info('photo', 'Received chart image', { from: ctx.from?.id });
+
+  const chatIdNum = ctx.chat!.id;
+  
+  // Progress message with streaming updates
+  const progressMsg = await ctx.reply('📥 Downloading chart...', { parse_mode: 'Markdown' });
+
+  try {
+    // Get the largest photo (last in array)
+    const photos = ctx.message.photo;
+    const largestPhoto = photos[photos.length - 1];
+    
+    // Download the photo
+    const file = await ctx.api.getFile(largestPhoto.file_id);
+    const filePath = file.file_path;
+    if (!filePath) {
+      await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatChartError('Could not download image'));
+      return;
+    }
+
+    // Fetch the actual file
+    const fileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${filePath}`;
+    const response = await fetch(fileUrl);
+    if (!response.ok) {
+      await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatChartError('Failed to fetch image'));
+      return;
+    }
+
+    // Convert to base64
+    const arrayBuffer = await response.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+
+    info('photo', 'Image downloaded', { size: `${(base64.length / 1024).toFixed(1)}KB` });
+
+    // Step 1: Extract levels
+    await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, '📊 Extracting levels...');
+
+    const analysis = await analyzeChart(base64);
+
+    if (!analysis.success) {
+      await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatChartError(analysis.error || 'Analysis failed'));
+      return;
+    }
+
+    if (analysis.keyZones.length === 0) {
+      await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatChartError('No zones detected'));
+      return;
+    }
+
+    // Step 2: Annotate chart
+    await ctx.api.editMessageText(
+      chatIdNum, 
+      progressMsg.message_id, 
+      `🎨 Drawing ${analysis.keyZones.length} zone${analysis.keyZones.length !== 1 ? 's' : ''}...`
+    );
+
+    const annotatedBase64 = await annotateChart(base64, analysis);
+
+    if (!annotatedBase64) {
+      await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatChartError('Annotation failed'));
+      return;
+    }
+
+    // Send annotated image
+    const imageBuffer = Buffer.from(annotatedBase64, 'base64');
+    await ctx.replyWithPhoto(new InputFile(imageBuffer, 'chart-annotated.png'), {
+      caption: formatChartCaption(analysis),
+      parse_mode: 'Markdown',
+    });
+
+    // Delete progress message after image is sent
+    try {
+      await ctx.api.deleteMessage(chatIdNum, progressMsg.message_id);
+    } catch {
+      // Message may already be deleted
+    }
+
+    info('photo', 'Annotation complete', { 
+      symbol: analysis.symbol, 
+      regime: analysis.regime.type,
+      zones: analysis.keyZones.length 
+    });
+
+  } catch (err) {
+    logErr('photo', err);
+    try {
+      await ctx.api.editMessageText(
+        chatIdNum,
+        progressMsg.message_id,
+        formatChartError(err instanceof Error ? err.message : 'Unknown error')
+      );
+    } catch {
+      // Message may have been deleted
+    }
+  }
+});
 
 // ============ TEXT HANDLER ============
 

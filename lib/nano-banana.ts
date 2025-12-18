@@ -1,8 +1,17 @@
 import { TrackedRepo } from './core-types.js';
 import { buildCoverPrompt } from './prompts.js';
+import { MODELS } from './config.js';
 
 // Using Gemini 3 Pro Image (Nano Banana Pro) - reasoning-first multimodal model
-const GEMINI_IMAGE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent';
+const GEMINI_IMAGE_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODELS.google.imageGen}:generateContent`;
+
+function getGeminiApiKey(): string {
+  const apiKey = process.env.GOOGLE_AI_KEY || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GOOGLE_AI_KEY or GEMINI_API_KEY not configured');
+  }
+  return apiKey;
+}
 
 interface GeminiImageResponse {
   candidates?: Array<{
@@ -23,11 +32,7 @@ interface GeminiImageResponse {
 }
 
 export async function generateRepoCover(repo: TrackedRepo): Promise<Buffer> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY not configured');
-  }
-
+  const apiKey = getGeminiApiKey();
   const { prompt } = buildCoverPrompt(repo);
 
   const response = await fetch(`${GEMINI_IMAGE_URL}?key=${apiKey}`, {
@@ -80,10 +85,7 @@ export async function polishScreenshot(
   screenshot: Buffer,
   context: { name: string; oneLiner: string; coreValue: string }
 ): Promise<Buffer> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY not configured');
-  }
+  const apiKey = getGeminiApiKey();
 
   const prompt = `You are a product designer creating a marketing screenshot.
 

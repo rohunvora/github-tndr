@@ -40,6 +40,11 @@ The bot is fully built and ready to deploy. You just need to:
 2. Create new key
 3. **Copy the key**
 
+### Google AI API Key (for Chart Analysis)
+1. Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+2. Create new key
+3. **Copy the key**
+
 ---
 
 ## Step 2: Deploy to Vercel
@@ -75,6 +80,7 @@ After first deploy, go to your Vercel dashboard:
 | `GITHUB_TOKEN` | Your GitHub personal access token |
 | `VERCEL_TOKEN` | Your Vercel token |
 | `ANTHROPIC_API_KEY` | Your Anthropic API key |
+| `GOOGLE_AI_KEY` | Your Google AI API key (for chart analysis) |
 
 4. Redeploy: `npx vercel --prod`
 
@@ -171,6 +177,7 @@ Once running, it will:
 - **React to deploys** with "who are you sending it to?"
 
 The bot is brutally honest and won't let your projects rot. 🔥
+
 
 
 
