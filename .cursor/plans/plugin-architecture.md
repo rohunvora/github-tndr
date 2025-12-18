@@ -1,6 +1,6 @@
 # Plugin Architecture Plan
 
-> Status: **READY TO BUILD** — Tool list finalized
+> Status: **PHASE 1-2 COMPLETE** — Tools migrated, ready for router refactor
 
 ## Overview
 
@@ -33,52 +33,57 @@ Restructure the codebase into a plugin-based architecture with **6 focused tools
 
 ---
 
-## Architecture
+## Architecture (IMPLEMENTED)
 
 ```
 lib/
-├── core/                    # Shared infrastructure
+├── core/                    # ✅ Shared infrastructure
 │   ├── config.ts            # AI providers, env vars
 │   ├── github.ts            # GitHub API client
 │   ├── state.ts             # Vercel KV state
 │   ├── logger.ts            # Logging
-│   └── types.ts             # Shared types
+│   ├── types.ts             # Shared types
+│   └── index.ts             # Re-exports
 │
-└── tools/                   # Each tool is isolated
+└── tools/                   # ✅ Each tool is isolated
     ├── types.ts             # Tool interface
     ├── registry.ts          # Auto-wires tools to bot
+    ├── index.ts             # Exports all tools
     │
-    ├── repo/                # /repo - GitHub analysis
+    ├── repo/                # ✅ /repo - GitHub analysis
     │   ├── index.ts         # Tool definition
     │   ├── analyzer.ts      # Analysis logic
     │   ├── prompts.ts       # AI prompts
+    │   ├── handler.ts       # Command handler
     │   └── format.ts        # Telegram formatting
     │
-    ├── chart/               # Photo → chart analysis
+    ├── chart/               # ✅ Photo → chart analysis
     │   ├── index.ts         # Tool definition
     │   ├── analysis.ts      # Core logic (SYNCS with bel-rtr)
-    │   ├── annotate.ts      # Image annotation (SYNCS)
     │   ├── types.ts         # Types (SYNCS)
+    │   ├── handler.ts       # Photo handler
     │   └── format.ts        # Telegram formatting (local)
     │
-    ├── scan/                # /scan - batch analysis
+    ├── scan/                # ✅ /scan - batch analysis
     │   ├── index.ts
-    │   └── handler.ts
+    │   ├── handler.ts
+    │   └── format.ts
     │
-    ├── preview/             # /preview - cover image
+    ├── preview/             # ✅ /preview - cover image
     │   ├── index.ts
     │   ├── generator.ts     # Gemini image gen
-    │   └── github-upload.ts # Add to README
+    │   └── handler.ts       # Approval flow
     │
-    ├── readme/              # /readme - README gen
+    ├── readme/              # ✅ /readme - README gen
     │   ├── index.ts
-    │   └── generator.ts
+    │   ├── generator.ts
+    │   └── handler.ts
     │
-    └── next/                # /next - project carousel
+    └── next/                # ✅ /next - project carousel
         ├── index.ts
         ├── selector.ts      # Pick best projects
-        ├── cards.ts         # Card generation
-        └── format.ts        # Carousel UI
+        ├── handler.ts       # Carousel navigation
+        └── format.ts        # Card UI
 ```
 
 ## Tool Interface
@@ -109,7 +114,7 @@ interface ToolCommand {
 
 ```
 ┌──────────────────────────────────────┐
-│  🔥 github-tndr                      │
+│  🔥 github-tndr         (1/5)        │
 │                                      │
 │  High momentum · 3 commits today     │
 │  "Chart analysis working, plugin     │
@@ -132,49 +137,48 @@ Bot: 🎨 Generating cover...
 
 Bot: [shows generated image]
      "github-tndr cover"
-     [✅ Use this] [🔄 Regenerate] [❌ Cancel]
+     [✅ Add to README] [🔄 Regenerate] [❌ Cancel]
 
-You: [✅ Use this]
+You: [✅ Add to README]
 
-Bot: ✅ Added to README header
-     → github.com/satoshi/github-tndr
+Bot: ✅ Cover added!
+     → .github/social-preview.png
 ```
 
 ## External Repo Sync (chart ↔ bel-rtr)
 
 | github-tndr | bel-rtr | Synced? |
 |-------------|---------|---------|
-| `lib/tools/chart/analysis.ts` | `lib/analysis.ts` | ✅ |
-| `lib/tools/chart/annotate.ts` | `lib/annotate.ts` | ✅ |
-| `lib/tools/chart/types.ts` | `lib/types.ts` | ✅ |
-| `lib/tools/chart/format.ts` | — | ❌ Local |
+| `lib/tools/chart/analysis.ts` | `lib/analysis.ts` | 🔄 To sync |
+| `lib/tools/chart/types.ts` | `lib/types.ts` | 🔄 To sync |
+| `lib/tools/chart/format.ts` | — | ❌ Local only |
 
 GitHub Actions auto-creates PRs when synced files change.
 
 ## Implementation Phases
 
-### Phase 1: Core Infrastructure
-- [ ] Extract `lib/core/` (config, github, state, logger, types)
-- [ ] Create `lib/tools/types.ts` with Tool interface
-- [ ] Create `lib/tools/registry.ts` with routing
+### Phase 1: Core Infrastructure ✅
+- [x] Extract `lib/core/` (config, github, state, logger, types)
+- [x] Create `lib/tools/types.ts` with Tool interface
+- [x] Create `lib/tools/registry.ts` with routing
 
-### Phase 2: Migrate Tools (one at a time)
-- [ ] `chart/` — already exists, just restructure
-- [ ] `repo/` — extract from current handlers
-- [ ] `scan/` — extract from telegram.ts
-- [ ] `preview/` — extract from nano-banana.ts
-- [ ] `readme/` — extract from readme-generator.ts
-- [ ] `next/` — extract from card-generator.ts, add carousel UX
+### Phase 2: Migrate Tools ✅
+- [x] `chart/` — restructured with handler/format split
+- [x] `repo/` — extracted from current handlers
+- [x] `scan/` — extracted from telegram.ts
+- [x] `preview/` — extracted from nano-banana.ts
+- [x] `readme/` — extracted from readme-generator.ts
+- [x] `next/` — new carousel UX implementation
 
-### Phase 3: Slim Down Router
-- [ ] Refactor `api/telegram.ts` to ~100 lines
+### Phase 3: Slim Down Router 🔄 (Next)
+- [ ] Refactor `api/telegram.ts` to use registry
+- [ ] Move all command handlers to tools
 - [ ] All logic delegates to tool registry
 
-### Phase 4: Sync Workflows
+### Phase 4: Sync Workflows 📋 (Planned)
 - [ ] `.github/workflows/sync-to-bel-rtr.yml`
 - [ ] Mirror workflow in bel-rtr repo
 
 ---
 
 *Last updated: December 18, 2025*
-
