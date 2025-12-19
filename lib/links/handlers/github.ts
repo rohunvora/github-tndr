@@ -13,12 +13,12 @@
  * - git@github.com:owner/repo.git
  */
 
-import { InlineKeyboard } from 'grammy';
+import { InlineKeyboard, InputFile } from 'grammy';
 import type { Context } from 'grammy';
 import type { LinkHandler, ParsedLink, LinkActionContext } from '../types.js';
 import { formatLinkCallback } from '../types.js';
 import { stateManager } from '../../core/state.js';
-import { info } from '../../core/logger.js';
+import { info, error as logErr } from '../../core/logger.js';
 
 // ============ Types ============
 
@@ -57,6 +57,22 @@ function parseGitHubUrl(input: string): GitHubLinkData | null {
   return null;
 }
 
+// ============ Verdict Display ============
+
+const verdictEmoji: Record<string, string> = {
+  ship: '🟢',
+  cut_to_core: '🟡',
+  no_core: '🔴',
+  dead: '☠️',
+};
+
+const verdictLabel: Record<string, string> = {
+  ship: 'SHIP',
+  cut_to_core: 'CUT TO CORE',
+  no_core: 'NO CORE',
+  dead: 'DEAD',
+};
+
 // ============ Handler Implementation ============
 
 export const githubLinkHandler: LinkHandler<GitHubLinkData> = {
@@ -89,23 +105,21 @@ export const githubLinkHandler: LinkHandler<GitHubLinkData> = {
     // Check if we already track this repo
     const tracked = await stateManager.getTrackedRepo(owner, name);
     
-    // Primary actions row
-    kb.text('🔍 Analyze', formatLinkCallback('github', 'analyze', owner, name));
+    // Primary actions row - TLDR is the main action
+    kb.text('📸 TLDR', formatLinkCallback('github', 'tldr', owner, name));
     kb.text('🎨 Preview', formatLinkCallback('github', 'preview', owner, name));
     kb.row();
     
     // Secondary actions
     kb.text('📝 README', formatLinkCallback('github', 'readme', owner, name));
-    kb.text('👁️ Watch', formatLinkCallback('github', 'watch', owner, name));
     
-    // Show status hint if tracked
+    // Show status if already tracked
     if (tracked) {
       const stateEmoji = tracked.state === 'shipped' ? '🚀' 
         : tracked.state === 'ready' ? '✅' 
         : tracked.state === 'dead' ? '☠️' 
         : '📊';
-      kb.row();
-      kb.text(`${stateEmoji} View Status`, formatLinkCallback('github', 'status', owner, name));
+      kb.text(`${stateEmoji} Status`, formatLinkCallback('github', 'status', owner, name));
     }
     
     return kb;
@@ -146,9 +160,9 @@ export const githubLinkHandler: LinkHandler<GitHubLinkData> = {
     
     // Dynamically import handlers to avoid circular deps
     switch (action) {
-      case 'analyze': {
-        const { handleRepo } = await import('../../bot/handlers/repo.js');
-        await handleRepo(ctx, repoInput);
+      case 'tldr': {
+        // TLDR: Analyze + Generate image + Show brief summary
+        await handleTldr(ctx, owner, name);
         break;
       }
       
@@ -161,12 +175,6 @@ export const githubLinkHandler: LinkHandler<GitHubLinkData> = {
       case 'readme': {
         const { registry } = await import('../../tools/registry.js');
         await registry.handleCommand('readme', ctx, repoInput);
-        break;
-      }
-      
-      case 'watch': {
-        const { handleWatch } = await import('../../bot/handlers/watch.js');
-        await handleWatch(ctx, repoInput);
         break;
       }
       
@@ -188,7 +196,7 @@ export const githubLinkHandler: LinkHandler<GitHubLinkData> = {
           });
           await stateManager.setMessageRepo(msg.message_id, owner, name);
         } else {
-          await ctx.reply(`Repo not tracked. Use Analyze first.`);
+          await ctx.reply(`Repo not tracked. Use TLDR first.`);
         }
         break;
       }
@@ -199,4 +207,125 @@ export const githubLinkHandler: LinkHandler<GitHubLinkData> = {
     }
   },
 };
+
+/**
+ * TLDR Handler - Analyze repo + Generate image + Show brief summary
+ * All in one action with the cover image
+ */
+async function handleTldr(ctx: Context, owner: string, name: string): Promise<void> {
+  info('tldr', 'Starting', { owner, name });
+  
+  // Show progress
+  const progressMsg = await ctx.reply(`📸 **${owner}/${name}**\n\n⏳ Analyzing...`, { parse_mode: 'Markdown' });
+  const chatId = ctx.chat!.id;
+  
+  try {
+    // Import what we need
+    const { GitHubClient } = await import('../../core/github.js');
+    const { getRepoAnalyzer } = await import('../../tools/repo/analyzer.js');
+    const { generateCoverImage } = await import('../../tools/preview/generator.js');
+    
+    const github = new GitHubClient(process.env.GITHUB_TOKEN!);
+    
+    // 1. Check if already analyzed
+    let repo = await stateManager.getTrackedRepo(owner, name);
+    
+    if (!repo?.analysis) {
+      // Need to analyze first
+      await ctx.api.editMessageText(chatId, progressMsg.message_id, 
+        `📸 **${owner}/${name}**\n\n⏳ Analyzing with Claude...`, 
+        { parse_mode: 'Markdown' }
+      );
+      
+      const repoInfo = await github.getRepoInfo(owner, name);
+      if (!repoInfo) {
+        throw new Error(`Repo not found or private`);
+      }
+      
+      const analysis = await getRepoAnalyzer().analyzeRepo(owner, name);
+      
+      // Save the analysis
+      repo = {
+        id: `${owner}/${name}`,
+        name,
+        owner,
+        state: analysis.verdict === 'ship' ? 'ready' 
+          : analysis.verdict === 'cut_to_core' ? 'has_core'
+          : analysis.verdict === 'no_core' ? 'no_core'
+          : 'dead',
+        analysis,
+        analyzed_at: new Date().toISOString(),
+        pending_action: null,
+        pending_since: null,
+        last_message_id: null,
+        last_push_at: repoInfo.pushed_at,
+        killed_at: null,
+        shipped_at: null,
+        cover_image_url: null,
+        homepage: repoInfo.homepage,
+      };
+      await stateManager.saveTrackedRepo(repo);
+      
+      info('tldr', 'Analysis complete', { owner, name, verdict: analysis.verdict });
+    }
+    
+    // 2. Generate cover image
+    await ctx.api.editMessageText(chatId, progressMsg.message_id, 
+      `📸 **${owner}/${name}**\n\n✓ Analyzed\n⏳ Generating cover...`, 
+      { parse_mode: 'Markdown' }
+    );
+    
+    const imageBuffer = await generateCoverImage(repo, []);
+    
+    // 3. Build TLDR caption
+    const a = repo.analysis!;
+    const emoji = verdictEmoji[a.verdict] || '⚪';
+    const label = verdictLabel[a.verdict] || a.verdict.toUpperCase();
+    
+    let caption = `${emoji} **${label}** — ${name}\n\n`;
+    caption += `${a.one_liner}\n`;
+    
+    if (a.core_value) {
+      caption += `\n💎 _${a.core_value}_`;
+    }
+    
+    // Next action hint
+    if (a.verdict === 'cut_to_core' && a.cut.length > 0) {
+      caption += `\n\n✂️ Cut: ${a.cut.slice(0, 3).join(', ')}`;
+    } else if (a.verdict === 'ship') {
+      caption += `\n\n🚀 Ready to ship!`;
+    }
+    
+    // Delete progress message
+    try {
+      await ctx.api.deleteMessage(chatId, progressMsg.message_id);
+    } catch { /* ok */ }
+    
+    // 4. Send image with TLDR caption
+    const kb = new InlineKeyboard()
+      .text('📋 Details', `more:${owner}:${name}`)
+      .text('🎨 New Cover', formatLinkCallback('github', 'preview', owner, name));
+    
+    const msg = await ctx.replyWithPhoto(new InputFile(imageBuffer, `${name}-cover.png`), {
+      caption,
+      parse_mode: 'Markdown',
+      reply_markup: kb,
+    });
+    
+    await stateManager.setMessageRepo(msg.message_id, owner, name);
+    
+    info('tldr', 'Complete', { owner, name });
+    
+  } catch (err) {
+    logErr('tldr', err, { owner, name });
+    try {
+      await ctx.api.editMessageText(chatId, progressMsg.message_id, 
+        `❌ **${owner}/${name}**\n\n${err instanceof Error ? err.message : 'Unknown error'}`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch {
+      await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }
+}
 

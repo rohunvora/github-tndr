@@ -20,7 +20,7 @@ import { registry, allTools } from '../lib/tools/index.js';
 // Legacy imports (to be migrated incrementally)
 import { RepoAnalyzer } from '../lib/analyzer.js';
 import { handleRepo, handleRepoDetails, handleRepoBack } from '../lib/bot/handlers/repo.js';
-import { handleWatch, handleUnwatch, handleWatching, handleMute } from '../lib/bot/handlers/watch.js';
+import { handleMute } from '../lib/bot/handlers/watch.js';
 import {
   formatScanSummary, formatCategoryView, formatStatus, formatCard, formatDetails,
   formatCursorPrompt, formatRepoCard, formatNoMoreCards,
@@ -136,15 +136,10 @@ bot.command('help', async (ctx) => {
 🎴 **Feed**
 /next — Get your next task card
 
-📡 **Notifications**
-/watch <repo> — Get push notifications
-/unwatch <repo> — Stop notifications
-/watching — List watched repos
-
 📈 **Charts**
 Send a photo → get TA with key zones
 
-💡 **Pro tip:** Paste any GitHub URL to get an action menu!`, { parse_mode: 'Markdown' });
+💡 **Pro tip:** Paste any GitHub URL to get a TLDR with cover image!`, { parse_mode: 'Markdown' });
 });
 
 // ============ NEW TOOL-BASED COMMANDS ============
@@ -299,26 +294,6 @@ bot.command('repo', async (ctx) => {
   handleRepo(ctx, input).catch(err => logErr('repo', err, { input }));
 });
 
-bot.command('watch', async (ctx) => {
-  if (ctx.from?.id.toString() !== chatId) return;
-  const rawInput = (ctx.message?.text || '').replace('/watch', '').trim();
-  if (!rawInput) { await ctx.reply('Usage: /watch <repo> or /watch <github-url>'); return; }
-  const input = normalizeRepoInput(rawInput); // Handles URLs → owner/name
-  await handleWatch(ctx, input);
-});
-
-bot.command('unwatch', async (ctx) => {
-  if (ctx.from?.id.toString() !== chatId) return;
-  const rawInput = (ctx.message?.text || '').replace('/unwatch', '').trim();
-  if (!rawInput) { await ctx.reply('Usage: /unwatch <repo> or /unwatch <github-url>'); return; }
-  const input = normalizeRepoInput(rawInput); // Handles URLs → owner/name
-  await handleUnwatch(ctx, input);
-});
-
-bot.command('watching', async (ctx) => {
-  if (ctx.from?.id.toString() !== chatId) return;
-  await handleWatching(ctx);
-});
 
 // ============ SCAN ============
 
