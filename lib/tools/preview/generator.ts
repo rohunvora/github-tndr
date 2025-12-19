@@ -310,7 +310,6 @@ export async function generateCoverImage(
           responseModalities: ['IMAGE'],
           imageConfig: {
             aspectRatio: '16:9',
-            imageSize: '4K',
           },
         },
       }),
@@ -389,7 +388,7 @@ export async function generateCoverImageStandalone(
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           responseModalities: ['IMAGE'],
-          imageConfig: { aspectRatio: '16:9', imageSize: '4K' },
+          imageConfig: { aspectRatio: '16:9' },
         },
       }),
       signal: controller.signal,
@@ -495,7 +494,6 @@ The goal is: same product, polished presentation.`;
           responseModalities: ['IMAGE'],
           imageConfig: {
             aspectRatio: '16:9',
-            imageSize: '4K',
           },
         },
       }),
