@@ -62,6 +62,8 @@ export interface ProgressTracker {
   currentPhase: string;
   /** Timestamp of last message edit (for rate limiting) */
   lastEditTime: number;
+  /** Timestamp when current phase started (for elapsed time) */
+  phaseStartTime: number;
   /** Grammy API instance for editing messages */
   api: Api;
 }
@@ -109,6 +111,7 @@ export async function createProgressTracker(
     phases,
     currentPhase: phases[0].id,
     lastEditTime: Date.now(),
+    phaseStartTime: Date.now(),
     api: ctx.api,
   };
 }
@@ -126,9 +129,16 @@ export async function updateProgress(
   phaseId: string,
   detail?: string
 ): Promise<void> {
-  // Rate limit edits to avoid Telegram throttling
   const now = Date.now();
-  if (now - tracker.lastEditTime < MIN_EDIT_INTERVAL) {
+  const phaseChanged = phaseId !== tracker.currentPhase;
+  
+  // Reset phase start time when moving to new phase
+  if (phaseChanged) {
+    tracker.phaseStartTime = now;
+  }
+
+  // Rate limit edits to avoid Telegram throttling (unless phase changed)
+  if (!phaseChanged && now - tracker.lastEditTime < MIN_EDIT_INTERVAL) {
     // Still update internal state even if we don't edit
     updatePhaseStatuses(tracker, phaseId, detail);
     return;
@@ -137,12 +147,15 @@ export async function updateProgress(
   updatePhaseStatuses(tracker, phaseId, detail);
   tracker.lastEditTime = now;
 
+  // Calculate elapsed time for current phase
+  const elapsed = Math.floor((now - tracker.phaseStartTime) / 1000);
+
   // Edit message (fire and forget, ignore rate limit errors)
   try {
     await tracker.api.editMessageText(
       tracker.chatId,
       tracker.messageId,
-      formatProgress(tracker.title, tracker.phases),
+      formatProgress(tracker.title, tracker.phases, elapsed),
       { parse_mode: 'Markdown' }
     );
   } catch {
@@ -245,30 +258,41 @@ _Copy this message to debug_`;
 }
 
 /**
- * Formats the progress message with Unicode box-drawing characters
+ * Formats the progress message with clear active state
+ * 
+ * Done:    ├─ ✓ Resolving
+ * Active:  ├─ ⏳ Generating cover (5s)
+ * Pending: ├─ ○ Uploading
  */
-function formatProgress(title: string, phases: ProgressPhase[]): string {
-  let msg = `🎨 **${title}**\n`;
+function formatProgress(title: string, phases: ProgressPhase[], elapsedSeconds?: number): string {
+  let msg = `🎨 **${title}**\n\n`;
 
   for (let i = 0; i < phases.length; i++) {
     const phase = phases[i];
-    const isLast = i === phases.length - 1;
-    const prefix = isLast ? '└─' : '├─';
 
-    // Status icon
-    let icon = '';
+    // Status icon at start for clarity
+    let icon: string;
+    let suffix = '';
+    
     if (phase.status === 'done') {
-      icon = ' ✓';
+      icon = '✓';
     } else if (phase.status === 'active') {
-      icon = '...';
+      icon = '⏳';
+      // Show elapsed time for active phase
+      if (elapsedSeconds !== undefined && elapsedSeconds > 0) {
+        suffix = ` (${elapsedSeconds}s)`;
+      }
     } else if (phase.status === 'skipped') {
-      icon = ' ⏭';
+      icon = '⏭';
+      suffix = ' cached';
+    } else {
+      icon = '○'; // Pending - empty circle
     }
 
-    // Optional detail
-    const detail = phase.detail ? ` (${phase.detail})` : '';
+    // Optional detail (like "Claude" or "Gemini")
+    const detail = phase.detail && phase.status === 'active' ? ` ${phase.detail}` : '';
 
-    msg += `${prefix} ${phase.label}${detail}${icon}\n`;
+    msg += `${icon} ${phase.label}${detail}${suffix}\n`;
   }
 
   return msg;
