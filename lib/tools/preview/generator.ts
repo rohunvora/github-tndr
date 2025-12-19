@@ -3,13 +3,14 @@
  * 
  * Generates cover images for GitHub repos using Gemini 3 Pro Image.
  * Supports iterative feedback to refine images based on user input.
- * Falls back to real screenshots if Gemini fails and repo has a homepage.
  * 
  * Features:
  * - Visual Constitution prompt for consistent, high-quality output
  * - Feedback accumulation for iterative refinement
  * - Timeout handling for serverless environments
- * - Screenshot fallback for reliability
+ * 
+ * Note: Screenshot fallback is NOT available in Edge runtime.
+ * For screenshot functionality, use a separate Node.js API route.
  * 
  * @example
  * ```typescript
@@ -26,18 +27,13 @@
 
 import { MODELS } from '../../core/config.js';
 import type { TrackedRepo } from '../../core/types.js';
-import { info, error as logErr } from '../../core/logger.js';
-import { screenshotUrl, isUrlAccessible } from '../../screenshot.js';
+import { info } from '../../core/logger.js';
 
 /** Gemini API endpoint for image generation */
 const GEMINI_IMAGE_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODELS.google.imageGen}:generateContent`;
 
 /** Timeout for image generation (45 seconds to leave buffer for Vercel's 60s limit) */
 const GENERATION_TIMEOUT = 45000;
-
-/** Screenshot dimensions for fallback */
-const SCREENSHOT_WIDTH = 1920;
-const SCREENSHOT_HEIGHT = 1080;
 
 /**
  * Gets the Gemini API key from environment
@@ -188,14 +184,37 @@ IMPORTANT:
 }
 
 /**
- * Generates an image using Gemini with timeout handling
+ * Generates a cover image for a repository using Gemini
  * 
  * @param repo - Repository with analysis data
- * @param feedback - User feedback to incorporate
+ * @param feedback - Array of user feedback strings (empty for first generation)
  * @returns Generated image as Buffer
  * @throws Error if generation fails or times out
+ * 
+ * @example
+ * ```typescript
+ * // Initial generation
+ * const image = await generateCoverImage(repo, []);
+ * 
+ * // After user rejects and provides feedback
+ * const refined = await generateCoverImage(repo, ['make it darker', 'show CLI output']);
+ * ```
  */
-async function generateWithGemini(repo: TrackedRepo, feedback: string[]): Promise<Buffer> {
+export async function generateCoverImage(
+  repo: TrackedRepo,
+  feedback: string[] = []
+): Promise<Buffer> {
+  const a = repo.analysis;
+  if (!a) {
+    throw new Error('Cannot generate cover without analysis');
+  }
+
+  info('preview', 'Generating cover', { 
+    repo: repo.name, 
+    feedbackCount: feedback.length,
+    attempt: feedback.length + 1,
+  });
+
   const apiKey = getGeminiApiKey();
   const prompt = buildPrompt(repo, feedback);
 
@@ -243,6 +262,7 @@ async function generateWithGemini(repo: TrackedRepo, feedback: string[]): Promis
       throw new Error('No image data in Gemini response');
     }
 
+    info('preview', 'Cover generated with Gemini', { repo: repo.name });
     return Buffer.from(imagePart.inlineData.data, 'base64');
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
@@ -251,101 +271,6 @@ async function generateWithGemini(repo: TrackedRepo, feedback: string[]): Promis
     throw err;
   } finally {
     clearTimeout(timeout);
-  }
-}
-
-/**
- * Attempts to take a screenshot of the repo's homepage as fallback
- * 
- * @param homepage - URL to screenshot
- * @returns Screenshot as Buffer
- * @throws Error if screenshot fails
- */
-async function tryScreenshotFallback(homepage: string): Promise<Buffer> {
-  // First check if URL is accessible
-  const accessible = await isUrlAccessible(homepage);
-  if (!accessible) {
-    throw new Error(`Homepage ${homepage} is not accessible`);
-  }
-
-  return screenshotUrl(homepage, {
-    width: SCREENSHOT_WIDTH,
-    height: SCREENSHOT_HEIGHT,
-    timeout: 15000,
-  });
-}
-
-/**
- * Generates a cover image for a repository
- * 
- * Tries Gemini first, falls back to screenshot if:
- * - Gemini fails (API error, quota, timeout)
- * - Repo has a homepage URL
- * 
- * @param repo - Repository with analysis data
- * @param feedback - Array of user feedback strings (empty for first generation)
- * @returns Generated image as Buffer
- * @throws Error if all generation methods fail
- * 
- * @example
- * ```typescript
- * // Initial generation
- * const image = await generateCoverImage(repo, []);
- * 
- * // After user rejects and provides feedback
- * const refined = await generateCoverImage(repo, ['make it darker', 'show CLI output']);
- * ```
- */
-export async function generateCoverImage(
-  repo: TrackedRepo,
-  feedback: string[] = []
-): Promise<Buffer> {
-  const a = repo.analysis;
-  if (!a) {
-    throw new Error('Cannot generate cover without analysis');
-  }
-
-  info('preview', 'Generating cover', { 
-    repo: repo.name, 
-    feedbackCount: feedback.length,
-    attempt: feedback.length + 1,
-  });
-
-  // Try Gemini first
-  try {
-    const image = await generateWithGemini(repo, feedback);
-    info('preview', 'Cover generated with Gemini', { repo: repo.name });
-    return image;
-  } catch (geminiErr) {
-    const errorMessage = geminiErr instanceof Error ? geminiErr.message : 'Unknown error';
-    info('preview', 'Gemini failed, checking fallback options', { 
-      repo: repo.name, 
-      error: errorMessage,
-    });
-
-    // Only try screenshot fallback if:
-    // 1. This is the first attempt (no feedback yet - screenshot can't incorporate feedback)
-    // 2. Repo has a homepage
-    if (feedback.length === 0 && repo.homepage) {
-      try {
-        info('preview', 'Trying screenshot fallback', { 
-          repo: repo.name, 
-          homepage: repo.homepage,
-        });
-        const screenshot = await tryScreenshotFallback(repo.homepage);
-        info('preview', 'Screenshot fallback succeeded', { repo: repo.name });
-        return screenshot;
-      } catch (screenshotErr) {
-        const ssError = screenshotErr instanceof Error ? screenshotErr.message : 'Unknown error';
-        info('preview', 'Screenshot fallback also failed', { 
-          repo: repo.name, 
-          error: ssError,
-        });
-      }
-    }
-
-    // All methods failed
-    throw new Error(`Image generation failed: ${errorMessage}`);
   }
 }
 
