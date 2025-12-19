@@ -1,4 +1,4 @@
-export const config = { runtime: 'edge', maxDuration: 60 };
+export const config = { runtime: 'nodejs', maxDuration: 300 };
 
 import { Bot, InlineKeyboard, Context, InputFile } from 'grammy';
 import { kv } from '@vercel/kv';

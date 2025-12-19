@@ -160,21 +160,21 @@ export interface LightweightRepoInfo {
  * Used for standalone image generation
  */
 function buildPromptFromMetadata(
-  info: LightweightRepoInfo,
+  repoInfo: LightweightRepoInfo,
   feedback: string[]
 ): string {
-  const mode = determineModeFromLanguage(info.language);
-  const description = info.description || `A ${info.language || 'software'} project`;
+  const mode = determineModeFromLanguage(repoInfo.language);
+  const description = repoInfo.description || `A ${repoInfo.language || 'software'} project`;
 
   let prompt = `
 ${VISUAL_CONSTITUTION}
 
-PRODUCT: "${info.name}"
+PRODUCT: "${repoInfo.name}"
 WHAT IT DOES: ${description}
 
 SELECTED MODE: ${mode.toUpperCase()}
 
-Generate a UI screenshot for "${info.name}".
+Generate a UI screenshot for "${repoInfo.name}".
 
 ${mode === 'terminal' ? `
 Show a floating terminal/code editor window on a dark matte background.
@@ -188,7 +188,7 @@ Style: Clean, minimal, like Stripe or Linear marketing screenshots.
 `}
 
 IMPORTANT:
-- Include the text "${info.name}" somewhere visible in the image
+- Include the text "${repoInfo.name}" somewhere visible in the image
 - Show realistic data, not placeholder text
 - This should look like a REAL PRODUCT SCREENSHOT, not a stock photo
 `;
@@ -366,17 +366,17 @@ export async function generateCoverImage(
  * ```
  */
 export async function generateCoverImageStandalone(
-  info: LightweightRepoInfo,
+  repoInfo: LightweightRepoInfo,
   feedback: string[] = []
 ): Promise<Buffer> {
   info('preview', 'Generating cover (standalone)', { 
-    name: info.name,
-    language: info.language,
+    name: repoInfo.name,
+    language: repoInfo.language,
     feedbackCount: feedback.length,
   });
 
   const apiKey = getGeminiApiKey();
-  const prompt = buildPromptFromMetadata(info, feedback);
+  const prompt = buildPromptFromMetadata(repoInfo, feedback);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT);
@@ -412,7 +412,7 @@ export async function generateCoverImageStandalone(
       throw new Error('No image data in Gemini response');
     }
 
-    info('preview', 'Cover generated (standalone)', { name: info.name });
+    info('preview', 'Cover generated (standalone)', { name: repoInfo.name });
     return Buffer.from(imagePart.inlineData.data, 'base64');
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {

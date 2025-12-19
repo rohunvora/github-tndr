@@ -19,6 +19,8 @@ import type { LinkHandler, ParsedLink, LinkActionContext } from '../types.js';
 import { formatLinkCallback } from '../types.js';
 import { stateManager } from '../../core/state.js';
 import { info, error as logErr } from '../../core/logger.js';
+import { executeAction } from '../../actions/index.js';
+import type { TrackedRepo } from '../../core/types.js';
 
 // ============ Types ============
 
@@ -151,7 +153,6 @@ export const githubLinkHandler: LinkHandler<GitHubLinkData> = {
   handleAction: async ({ ctx, action, parts }: LinkActionContext<GitHubLinkData>): Promise<void> => {
     // parts = [owner, name] from callback data
     const [owner, name] = parts;
-    const repoInput = `${owner}/${name}`;
     
     await ctx.answerCallbackQuery();
     
@@ -162,23 +163,35 @@ export const githubLinkHandler: LinkHandler<GitHubLinkData> = {
       // Message may already be deleted
     }
     
-    // Dynamically import handlers to avoid circular deps
+    // Get or create repo record
+    let repo = await stateManager.getTrackedRepo(owner, name);
+    if (!repo) {
+      repo = createEmptyRepo(owner, name);
+    }
+    
+    // Use the action pipeline - it handles dependencies automatically
     switch (action) {
       case 'tldr': {
-        // TLDR: Analyze + Generate image + Show brief summary
+        // TLDR: Custom handler for fast summary (uses cached data)
         await handleTldr(ctx, owner, name);
         break;
       }
       
       case 'preview': {
-        const { registry } = await import('../../tools/registry.js');
-        await registry.handleCommand('preview', ctx, repoInput);
+        // Preview: Uses pipeline - will auto-run analyze if needed
+        const result = await executeAction('preview', ctx, owner, name, repo);
+        if (!result.success) {
+          await ctx.reply(`❌ Failed to generate cover: ${result.error}`, { parse_mode: 'Markdown' });
+        }
         break;
       }
       
       case 'readme': {
-        const { registry } = await import('../../tools/registry.js');
-        await registry.handleCommand('readme', ctx, repoInput);
+        // README: Uses pipeline - will auto-run analyze if needed
+        const result = await executeAction('readme', ctx, owner, name, repo);
+        if (!result.success) {
+          await ctx.reply(`❌ Failed to generate README: ${result.error}`, { parse_mode: 'Markdown' });
+        }
         break;
       }
       
@@ -330,5 +343,30 @@ async function handleTldr(ctx: Context, owner: string, name: string): Promise<vo
       await ctx.reply(errorMsg, { parse_mode: 'Markdown' });
     }
   }
+}
+
+// ============ Helper ============
+
+/**
+ * Create an empty TrackedRepo record
+ * Used when no record exists yet
+ */
+function createEmptyRepo(owner: string, name: string): TrackedRepo {
+  return {
+    id: `${owner}/${name}`,
+    name,
+    owner,
+    state: 'unanalyzed',
+    analysis: null,
+    analyzed_at: null,
+    pending_action: null,
+    pending_since: null,
+    last_message_id: null,
+    last_push_at: null,
+    killed_at: null,
+    shipped_at: null,
+    cover_image_url: null,
+    homepage: null,
+  };
 }
 
