@@ -10,6 +10,7 @@ import { stateManager } from '../lib/core/state.js';
 import { GitHubClient } from '../lib/core/github.js';
 import { getAnthropicClient } from '../lib/core/config.js';
 import type { TrackedRepo } from '../lib/core/types.js';
+import { parseGitHubUrl, isGitHubUrl, normalizeRepoInput } from '../lib/utils/github-url.js';
 
 // Tool registry
 import { registry, allTools } from '../lib/tools/index.js';
@@ -132,15 +133,18 @@ bot.command('help', async (ctx) => {
 /watching — List watched repos
 
 📈 **Charts**
-Send a photo → get TA with key zones`, { parse_mode: 'Markdown' });
+Send a photo → get TA with key zones
+
+💡 **Pro tip:** Paste any GitHub URL to get an action menu!`, { parse_mode: 'Markdown' });
 });
 
 // ============ NEW TOOL-BASED COMMANDS ============
 
-// /preview - delegates to preview tool
+// /preview - delegates to preview tool (accepts URLs too)
 bot.command('preview', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
-  const input = (ctx.message?.text || '').replace('/preview', '').trim();
+  const rawInput = (ctx.message?.text || '').replace('/preview', '').trim();
+  const input = normalizeRepoInput(rawInput); // Handles URLs → owner/name
   
   // Use tool registry
   const handled = await registry.handleCommand('preview', ctx, input);
@@ -149,10 +153,11 @@ bot.command('preview', async (ctx) => {
   }
 });
 
-// /readme - delegates to readme tool
+// /readme - delegates to readme tool (accepts URLs too)
 bot.command('readme', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
-  const input = (ctx.message?.text || '').replace('/readme', '').trim();
+  const rawInput = (ctx.message?.text || '').replace('/readme', '').trim();
+  const input = normalizeRepoInput(rawInput); // Handles URLs → owner/name
   
   // Use tool registry
   const handled = await registry.handleCommand('readme', ctx, input);
@@ -254,22 +259,25 @@ bot.command('status', async (ctx) => {
 
 bot.command('repo', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
-  const input = (ctx.message?.text || '').replace('/repo', '').trim();
-  if (!input) { await ctx.reply('Usage: /repo <name> or /repo owner/name'); return; }
+  const rawInput = (ctx.message?.text || '').replace('/repo', '').trim();
+  if (!rawInput) { await ctx.reply('Usage: /repo <name> or /repo owner/name or /repo <github-url>'); return; }
+  const input = normalizeRepoInput(rawInput); // Handles URLs → owner/name
   handleRepo(ctx, input).catch(err => logErr('repo', err, { input }));
 });
 
 bot.command('watch', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
-  const input = (ctx.message?.text || '').replace('/watch', '').trim();
-  if (!input) { await ctx.reply('Usage: /watch <repo>'); return; }
+  const rawInput = (ctx.message?.text || '').replace('/watch', '').trim();
+  if (!rawInput) { await ctx.reply('Usage: /watch <repo> or /watch <github-url>'); return; }
+  const input = normalizeRepoInput(rawInput); // Handles URLs → owner/name
   await handleWatch(ctx, input);
 });
 
 bot.command('unwatch', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
-  const input = (ctx.message?.text || '').replace('/unwatch', '').trim();
-  if (!input) { await ctx.reply('Usage: /unwatch <repo>'); return; }
+  const rawInput = (ctx.message?.text || '').replace('/unwatch', '').trim();
+  if (!rawInput) { await ctx.reply('Usage: /unwatch <repo> or /unwatch <github-url>'); return; }
+  const input = normalizeRepoInput(rawInput); // Handles URLs → owner/name
   await handleUnwatch(ctx, input);
 });
 
@@ -444,6 +452,43 @@ bot.on('callback_query:data', async (ctx) => {
   if (action.startsWith('preview_') || action.startsWith('readme_') || action.startsWith('next_')) {
     const handled = await registry.handleCallback(data, ctx);
     if (handled) return;
+  }
+  
+  // Handle repo link menu actions (from pasted GitHub URLs)
+  if (action.startsWith('repolink_')) {
+    const subAction = action.replace('repolink_', '');
+    const owner = parts[1];
+    const name = parts[2];
+    const repoInput = `${owner}/${name}`;
+    
+    await ctx.answerCallbackQuery();
+    
+    switch (subAction) {
+      case 'analyze':
+        // Delete the menu message and run analyze
+        try { await ctx.deleteMessage(); } catch { /* ok */ }
+        await handleRepo(ctx, repoInput);
+        break;
+        
+      case 'preview':
+        // Delete the menu and run preview
+        try { await ctx.deleteMessage(); } catch { /* ok */ }
+        await registry.handleCommand('preview', ctx, repoInput);
+        break;
+        
+      case 'readme':
+        // Delete the menu and run readme
+        try { await ctx.deleteMessage(); } catch { /* ok */ }
+        await registry.handleCommand('readme', ctx, repoInput);
+        break;
+        
+      case 'watch':
+        // Delete the menu and run watch
+        try { await ctx.deleteMessage(); } catch { /* ok */ }
+        await handleWatch(ctx, repoInput);
+        break;
+    }
+    return;
   }
   
   // Session-based card actions
@@ -1064,6 +1109,33 @@ bot.on('message:photo', async (ctx) => {
 // Import feedback handler for preview tool
 import { handleFeedbackReply } from '../lib/tools/preview/feedback.js';
 
+/**
+ * Create action menu keyboard for a GitHub repo link
+ * Shows available actions based on whether we've seen this repo before
+ */
+function repoLinkKeyboard(owner: string, name: string, isTracked: boolean, state?: string): InlineKeyboard {
+  const id = `${owner}:${name}`;
+  const kb = new InlineKeyboard();
+  
+  // Primary actions row
+  kb.text('🔍 Analyze', `repolink_analyze:${id}`);
+  kb.text('🎨 Preview', `repolink_preview:${id}`);
+  kb.row();
+  
+  // Secondary actions
+  kb.text('📝 README', `repolink_readme:${id}`);
+  kb.text('👁️ Watch', `repolink_watch:${id}`);
+  
+  // Show status hint if tracked
+  if (isTracked && state) {
+    const stateEmoji = state === 'shipped' ? '🚀' : state === 'ready' ? '✅' : state === 'dead' ? '☠️' : '📊';
+    kb.row();
+    kb.text(`${stateEmoji} View Status`, `repo:${id}`);
+  }
+  
+  return kb;
+}
+
 bot.on('message:text', async (ctx) => {
   const text = ctx.message.text;
   if (ctx.from?.id.toString() !== chatId || text.startsWith('/')) return;
@@ -1076,6 +1148,36 @@ bot.on('message:text', async (ctx) => {
   } catch (err) {
     logErr('feedback', err);
     // Continue to other handlers if feedback handling fails
+  }
+
+  // Smart GitHub link detection
+  if (isGitHubUrl(text)) {
+    const parsed = parseGitHubUrl(text);
+    if (parsed) {
+      info('link', 'GitHub URL detected', { owner: parsed.owner, name: parsed.name });
+      
+      // Check if we already track this repo
+      const tracked = await stateManager.getTrackedRepo(parsed.owner, parsed.name);
+      
+      let statusLine = '';
+      if (tracked) {
+        const stateLabel = tracked.state === 'shipped' ? 'Shipped 🚀' 
+          : tracked.state === 'ready' ? 'Ready to ship'
+          : tracked.state === 'has_core' ? 'Needs focus'
+          : tracked.state === 'dead' ? 'Dead'
+          : 'Analyzed';
+        statusLine = `\n_${stateLabel}_`;
+      }
+      
+      await ctx.reply(
+        `**${parsed.owner}/${parsed.name}**${statusLine}\n\nWhat would you like to do?`,
+        { 
+          parse_mode: 'Markdown', 
+          reply_markup: repoLinkKeyboard(parsed.owner, parsed.name, !!tracked, tracked?.state),
+        }
+      );
+      return;
+    }
   }
 
   const lower = text.toLowerCase().trim();
