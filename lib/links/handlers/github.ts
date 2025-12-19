@@ -80,14 +80,14 @@ const verdictLabel: Record<string, string> = {
  * Reusable across: link detection, push notifications, etc.
  * 
  * 3 clear actions:
- * - TLDR: Analyze + generate image + show summary
- * - Preview: Regenerate/upload cover image
+ * - TLDR: Fast summary (analyze if needed, use cached cover)
+ * - Cover: Generate new cover image (slow, ~30s)
  * - README: Generate/optimize README
  */
 export function buildGitHubRepoKeyboard(owner: string, name: string): InlineKeyboard {
   return new InlineKeyboard()
     .text('📸 TLDR', formatLinkCallback('github', 'tldr', owner, name))
-    .text('🎨 Preview', formatLinkCallback('github', 'preview', owner, name))
+    .text('🎨 Cover', formatLinkCallback('github', 'preview', owner, name))
     .row()
     .text('📝 README', formatLinkCallback('github', 'readme', owner, name));
 }
@@ -104,7 +104,7 @@ export function buildGitHubRepoKeyboardRaw(
     inline_keyboard: [
       [
         { text: '📸 TLDR', callback_data: formatLinkCallback('github', 'tldr', owner, name) },
-        { text: '🎨 Preview', callback_data: formatLinkCallback('github', 'preview', owner, name) },
+        { text: '🎨 Cover', callback_data: formatLinkCallback('github', 'preview', owner, name) },
       ],
       [
         { text: '📝 README', callback_data: formatLinkCallback('github', 'readme', owner, name) },
@@ -190,34 +190,37 @@ export const githubLinkHandler: LinkHandler<GitHubLinkData> = {
 };
 
 /**
- * TLDR Handler - Analyze repo + Generate image + Show brief summary
- * All in one action with the cover image
+ * TLDR Handler - Fast summary with cached image
+ * 
+ * Flow:
+ * 1. Use cached analysis if available, else analyze (15-30s)
+ * 2. Use cached cover image if available (instant)
+ * 3. If no cover, show text-only with "Generate Cover" button
+ * 
+ * This keeps TLDR fast and within Vercel's 60s timeout.
+ * Image generation is deferred to explicit Preview action.
  */
 async function handleTldr(ctx: Context, owner: string, name: string): Promise<void> {
   info('tldr', 'Starting', { owner, name });
   
-  // Show progress
-  const progressMsg = await ctx.reply(`📸 **${owner}/${name}**\n\n⏳ Analyzing...`, { parse_mode: 'Markdown' });
   const chatId = ctx.chat!.id;
+  let progressMsg: { message_id: number } | null = null;
   
   try {
-    // Import what we need
-    const { GitHubClient } = await import('../../core/github.js');
-    const { getRepoAnalyzer } = await import('../../tools/repo/analyzer.js');
-    const { generateCoverImage } = await import('../../tools/preview/generator.js');
-    
-    const github = new GitHubClient(process.env.GITHUB_TOKEN!);
-    
     // 1. Check if already analyzed
     let repo = await stateManager.getTrackedRepo(owner, name);
     
     if (!repo?.analysis) {
-      // Need to analyze first
-      await ctx.api.editMessageText(chatId, progressMsg.message_id, 
-        `📸 **${owner}/${name}**\n\n⏳ Analyzing with Claude...`, 
+      // Need to analyze - show progress
+      progressMsg = await ctx.reply(
+        `⏳ **${owner}/${name}**\n\nAnalyzing...`, 
         { parse_mode: 'Markdown' }
       );
       
+      const { GitHubClient } = await import('../../core/github.js');
+      const { getRepoAnalyzer } = await import('../../tools/repo/analyzer.js');
+      
+      const github = new GitHubClient(process.env.GITHUB_TOKEN!);
       const repoInfo = await github.getRepoInfo(owner, name);
       if (!repoInfo) {
         throw new Error(`Repo not found or private`);
@@ -248,17 +251,15 @@ async function handleTldr(ctx: Context, owner: string, name: string): Promise<vo
       await stateManager.saveTrackedRepo(repo);
       
       info('tldr', 'Analysis complete', { owner, name, verdict: analysis.verdict });
+      
+      // Delete progress message
+      try {
+        await ctx.api.deleteMessage(chatId, progressMsg.message_id);
+        progressMsg = null;
+      } catch { /* ok */ }
     }
     
-    // 2. Generate cover image
-    await ctx.api.editMessageText(chatId, progressMsg.message_id, 
-      `📸 **${owner}/${name}**\n\n✓ Analyzed\n⏳ Generating cover...`, 
-      { parse_mode: 'Markdown' }
-    );
-    
-    const imageBuffer = await generateCoverImage(repo, []);
-    
-    // 3. Build TLDR caption
+    // 2. Build TLDR caption
     const a = repo.analysis!;
     const emoji = verdictEmoji[a.verdict] || '⚪';
     const label = verdictLabel[a.verdict] || a.verdict.toUpperCase();
@@ -277,35 +278,56 @@ async function handleTldr(ctx: Context, owner: string, name: string): Promise<vo
       caption += `\n\n🚀 Ready to ship!`;
     }
     
-    // Delete progress message
-    try {
-      await ctx.api.deleteMessage(chatId, progressMsg.message_id);
-    } catch { /* ok */ }
+    // 3. Check for cached cover image
+    const hasCover = repo.cover_image_url && repo.cover_image_url.length > 0;
     
-    // 4. Send image with TLDR caption
-    const kb = new InlineKeyboard()
-      .text('📋 Details', `more:${owner}:${name}`)
-      .text('🎨 New Cover', formatLinkCallback('github', 'preview', owner, name));
+    if (hasCover) {
+      // Have cached cover - show image with caption
+      const kb = new InlineKeyboard()
+        .text('📋 Details', `more:${owner}:${name}`)
+        .text('🎨 New Cover', formatLinkCallback('github', 'preview', owner, name));
+      
+      const msg = await ctx.reply(caption, {
+        parse_mode: 'Markdown',
+        reply_markup: kb,
+        link_preview_options: {
+          url: repo.cover_image_url!,
+          show_above_text: true,
+          prefer_large_media: true,
+        },
+      });
+      
+      await stateManager.setMessageRepo(msg.message_id, owner, name);
+    } else {
+      // No cover - show text with generate button
+      const kb = new InlineKeyboard()
+        .text('🎨 Generate Cover', formatLinkCallback('github', 'preview', owner, name))
+        .row()
+        .text('📋 Details', `more:${owner}:${name}`);
+      
+      const msg = await ctx.reply(caption, {
+        parse_mode: 'Markdown',
+        reply_markup: kb,
+      });
+      
+      await stateManager.setMessageRepo(msg.message_id, owner, name);
+    }
     
-    const msg = await ctx.replyWithPhoto(new InputFile(imageBuffer, `${name}-cover.png`), {
-      caption,
-      parse_mode: 'Markdown',
-      reply_markup: kb,
-    });
-    
-    await stateManager.setMessageRepo(msg.message_id, owner, name);
-    
-    info('tldr', 'Complete', { owner, name });
+    info('tldr', 'Complete', { owner, name, hasCover });
     
   } catch (err) {
     logErr('tldr', err, { owner, name });
-    try {
-      await ctx.api.editMessageText(chatId, progressMsg.message_id, 
-        `❌ **${owner}/${name}**\n\n${err instanceof Error ? err.message : 'Unknown error'}`,
-        { parse_mode: 'Markdown' }
-      );
-    } catch {
-      await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Unknown error'}`);
+    
+    const errorMsg = `❌ **${owner}/${name}**\n\n${err instanceof Error ? err.message : 'Unknown error'}`;
+    
+    if (progressMsg) {
+      try {
+        await ctx.api.editMessageText(chatId, progressMsg.message_id, errorMsg, { parse_mode: 'Markdown' });
+      } catch {
+        await ctx.reply(errorMsg, { parse_mode: 'Markdown' });
+      }
+    } else {
+      await ctx.reply(errorMsg, { parse_mode: 'Markdown' });
     }
   }
 }
