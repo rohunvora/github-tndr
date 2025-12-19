@@ -1,10 +1,7 @@
 export const config = { runtime: 'edge', maxDuration: 30 };
 
 import { info, error as logErr } from '../lib/logger.js';
-import { getAnthropicClient } from '../lib/config.js';
 import { stateManager } from '../lib/state.js';
-import { generatePushFeedback } from '../lib/ai/push-feedback.js';
-import { getPortfolioSnapshot } from '../lib/portfolio.js';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const CHAT_ID = process.env.USER_TELEGRAM_CHAT_ID!;
@@ -117,6 +114,60 @@ function pushKeyboard(fullName: string) {
   };
 }
 
+/**
+ * Format a simple push notification (no AI, just commit summary)
+ * Saves AI costs - use "Analyze" button for AI insight
+ */
+function formatSimplePush(
+  repoName: string,
+  commits: Array<{
+    message: string;
+    added: string[];
+    removed: string[];
+    modified: string[];
+  }>
+): string {
+  const lines: string[] = [];
+  lines.push(`⚡ **${repoName}** pushed`);
+  lines.push('');
+  
+  // Show up to 5 commits
+  const displayCommits = commits.slice(0, 5);
+  let totalFiles = 0;
+  
+  for (const commit of displayCommits) {
+    // Truncate message at 50 chars, take first line only
+    const firstLine = commit.message.split('\n')[0];
+    const truncated = firstLine.length > 50 ? firstLine.slice(0, 47) + '...' : firstLine;
+    
+    // Build file count string
+    const counts: string[] = [];
+    if (commit.added.length > 0) counts.push(`+${commit.added.length}`);
+    if (commit.removed.length > 0) counts.push(`-${commit.removed.length}`);
+    if (commit.modified.length > 0) counts.push(`~${commit.modified.length}`);
+    
+    const countStr = counts.length > 0 ? ` (${counts.join(', ')})` : '';
+    lines.push(`• "${truncated}"${countStr}`);
+    
+    totalFiles += commit.added.length + commit.removed.length + commit.modified.length;
+  }
+  
+  // Show if more commits were truncated
+  if (commits.length > 5) {
+    lines.push(`_... +${commits.length - 5} more commits_`);
+    // Count files from remaining commits
+    for (let i = 5; i < commits.length; i++) {
+      const c = commits[i];
+      totalFiles += c.added.length + c.removed.length + c.modified.length;
+    }
+  }
+  
+  lines.push('');
+  lines.push(`📁 ${totalFiles} file${totalFiles !== 1 ? 's' : ''} changed`);
+  
+  return lines.join('\n');
+}
+
 export default async function handler(req: Request) {
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
@@ -191,41 +242,12 @@ export default async function handler(req: Request) {
       await stateManager.setLastProcessedSha(fullName, headSha);
     }
     
-    // Get tracked repo for context (optional - we notify even without it)
-    const [owner, name] = fullName.split('/');
-    const tracked = await stateManager.getTrackedRepo(owner, name);
-    const analysis = tracked?.analysis || null;
-    
-    // Get portfolio snapshot for context
-    const portfolio = await getPortfolioSnapshot();
-    
-    // Generate AI feedback
-    info('webhook.push', 'Generating feedback', { 
-      fullName, 
-      hasAnalysis: !!analysis,
-      portfolioActive: portfolio.counts.active,
-      isFocus: portfolio.focus === fullName,
-    });
-    const anthropic = getAnthropicClient();
-    
-    const feedback = await generatePushFeedback(anthropic, {
-      repoName,
-      fullName,
-      commits: push.commits.map(c => ({
-        message: c.message,
-        added: c.added,
-        removed: c.removed,
-        modified: c.modified,
-      })),
-      analysis,
-      portfolio,  // NEW: Pass portfolio context
-    });
-    
-    // Format message with repo header
-    const message = `⚡ **${repoName}**\n\n${feedback}`;
+    // Format simple push notification (no AI - saves costs)
+    // Use "Analyze" button for AI insight when needed
+    const message = formatSimplePush(repoName, push.commits);
     
     // Send notification
-    info('webhook.push', 'Sending', { fullName, feedbackLength: feedback.length });
+    info('webhook.push', 'Sending simple notification', { fullName, commits: push.commits.length });
     await sendTelegram(message, pushKeyboard(fullName));
     
     return new Response(JSON.stringify({ ok: true, notified: true }), {
