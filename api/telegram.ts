@@ -1061,9 +1061,22 @@ bot.on('message:photo', async (ctx) => {
 
 // ============ TEXT HANDLER ============
 
+// Import feedback handler for preview tool
+import { handleFeedbackReply } from '../lib/tools/preview/feedback.js';
+
 bot.on('message:text', async (ctx) => {
   const text = ctx.message.text;
   if (ctx.from?.id.toString() !== chatId || text.startsWith('/')) return;
+
+  // Check if this is a feedback reply for preview tool
+  // This must come before other text handling
+  try {
+    const handled = await handleFeedbackReply(ctx);
+    if (handled) return;
+  } catch (err) {
+    logErr('feedback', err);
+    // Continue to other handlers if feedback handling fails
+  }
 
   const lower = text.toLowerCase().trim();
 

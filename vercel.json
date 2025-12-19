@@ -1,1 +1,10 @@
-{}
+{
+  "functions": {
+    "api/telegram.ts": {
+      "maxDuration": 60
+    },
+    "api/github-webhook.ts": {
+      "maxDuration": 30
+    }
+  }
+}
