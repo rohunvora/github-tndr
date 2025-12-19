@@ -134,20 +134,36 @@ export const previewAction: Action = {
     
     info('action.preview', 'Cover generated and uploaded', { owner, name });
     
-    // Send the image to the user
+    // Send the image to the user using InputFile for proper Buffer handling
+    const { InputFile } = await import('grammy');
+    
     try {
-      await ctx.replyWithPhoto(imageBuffer, {
+      await ctx.replyWithPhoto(new InputFile(imageBuffer, 'cover.png'), {
         caption: `✨ Cover image generated for *${owner}/${name}*\n\n` +
           `📤 Uploaded to \`.github/social-preview.png\`\n` +
           `${uploadResult.readmeUpdated ? '📝 README updated with header' : ''}`,
         parse_mode: 'Markdown',
       });
-    } catch {
-      // If photo fails, send link instead
-      await ctx.reply(
-        `✨ Cover generated! View: ${coverUrl}`,
-        { parse_mode: 'Markdown' }
-      );
+    } catch (photoErr) {
+      // If photo fails, log and try URL fallback
+      info('action.preview', 'Photo send failed, trying URL', { error: String(photoErr) });
+      try {
+        // Wait a moment for GitHub to process the commit
+        await new Promise(r => setTimeout(r, 2000));
+        await ctx.replyWithPhoto(coverUrl, {
+          caption: `✨ Cover image generated for *${owner}/${name}*\n\n` +
+            `📤 Uploaded to \`.github/social-preview.png\``,
+          parse_mode: 'Markdown',
+        });
+      } catch {
+        // Last resort: just send text
+        await ctx.reply(
+          `✨ Cover generated for *${owner}/${name}*!\n\n` +
+          `📤 Uploaded to GitHub: \`.github/social-preview.png\`\n` +
+          `🔗 [View image](${coverUrl})`,
+          { parse_mode: 'Markdown' }
+        );
+      }
     }
     
     return { success: true, repo: updatedRepo };
