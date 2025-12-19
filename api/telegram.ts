@@ -1132,21 +1132,81 @@ bot.on('message:text', async (ctx) => {
 
 // ============ WEBHOOK ============
 
-export default async function handler(req: Request) {
-  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+// Helper to read request body (works with both Edge and Node.js runtime)
+async function readRequestBody(req: Request | NodeRequest): Promise<unknown> {
+  // Check if it's a Fetch API Request (Edge runtime or Node.js with Web API)
+  if (typeof (req as Request).json === 'function') {
+    return (req as Request).json();
+  }
+  
+  // Node.js runtime - read body manually
+  const nodeReq = req as NodeRequest;
+  return new Promise((resolve, reject) => {
+    let body = '';
+    nodeReq.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+    nodeReq.on('end', () => {
+      try {
+        resolve(JSON.parse(body));
+      } catch (e) {
+        reject(e);
+      }
+    });
+    nodeReq.on('error', reject);
+  });
+}
+
+// Type for Node.js IncomingMessage
+interface NodeRequest {
+  method?: string;
+  on(event: 'data', listener: (chunk: Buffer) => void): void;
+  on(event: 'end', listener: () => void): void;
+  on(event: 'error', listener: (err: Error) => void): void;
+}
+
+// Type for Node.js response
+interface NodeResponse {
+  statusCode: number;
+  setHeader(name: string, value: string): void;
+  end(body?: string): void;
+}
+
+export default async function handler(
+  req: Request | NodeRequest, 
+  res?: NodeResponse
+) {
+  const method = (req as Request).method || (req as NodeRequest).method;
+  
+  // Helper to send response (works with both runtimes)
+  const sendResponse = (body: string, status: number = 200) => {
+    if (res) {
+      // Node.js runtime
+      res.statusCode = status;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(body);
+      return undefined as unknown as Response;
+    } else {
+      // Edge runtime
+      return new Response(body, { 
+        status, 
+        headers: { 'Content-Type': 'application/json' } 
+      });
+    }
+  };
+  
+  if (method !== 'POST') {
+    return sendResponse('{"error":"Method not allowed"}', 405);
+  }
 
   // Initialize tools on first request
   await initTools();
 
   try {
-    const update = await req.json() as Update;
+    const update = await readRequestBody(req) as Update;
     
     // Layer 1: Skip duplicate updates (Telegram retries after ~30s timeout)
     // This prevents the "looping progress messages" bug when handlers take too long
     if (!await shouldProcessUpdate(update.update_id)) {
-      return new Response(JSON.stringify({ ok: true, skipped: 'duplicate' }), { 
-        headers: { 'Content-Type': 'application/json' } 
-      });
+      return sendResponse(JSON.stringify({ ok: true, skipped: 'duplicate' }));
     }
     
     info('webhook', 'Update', {
@@ -1155,9 +1215,9 @@ export default async function handler(req: Request) {
       data: (update.message?.text || update.callback_query?.data || '').substring(0, 50),
     });
     await bot.handleUpdate(update);
-    return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } });
+    return sendResponse(JSON.stringify({ ok: true }));
   } catch (err) {
     logErr('webhook', err);
-    return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    return sendResponse(JSON.stringify({ error: String(err) }), 500);
   }
 }
