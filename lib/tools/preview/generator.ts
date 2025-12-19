@@ -133,6 +133,78 @@ function determineMode(whatItDoes: string): 'terminal' | 'dashboard' {
 }
 
 /**
+ * Determines visual mode from GitHub language
+ * CLI-focused languages → terminal mode
+ */
+function determineModeFromLanguage(language: string | null): 'terminal' | 'dashboard' {
+  if (!language) return 'dashboard';
+  
+  const terminalLanguages = ['python', 'go', 'rust', 'ruby', 'shell', 'bash', 'c', 'c++', 'java'];
+  const lower = language.toLowerCase();
+  
+  return terminalLanguages.includes(lower) ? 'terminal' : 'dashboard';
+}
+
+/**
+ * Lightweight repo info for standalone image generation
+ * Can be constructed from GitHub API without Claude analysis
+ */
+export interface LightweightRepoInfo {
+  name: string;
+  description: string | null;
+  language: string | null;
+}
+
+/**
+ * Builds prompt from lightweight GitHub metadata (no analysis needed)
+ * Used for standalone image generation
+ */
+function buildPromptFromMetadata(
+  info: LightweightRepoInfo,
+  feedback: string[]
+): string {
+  const mode = determineModeFromLanguage(info.language);
+  const description = info.description || `A ${info.language || 'software'} project`;
+
+  let prompt = `
+${VISUAL_CONSTITUTION}
+
+PRODUCT: "${info.name}"
+WHAT IT DOES: ${description}
+
+SELECTED MODE: ${mode.toUpperCase()}
+
+Generate a UI screenshot for "${info.name}".
+
+${mode === 'terminal' ? `
+Show a floating terminal/code editor window on a dark matte background.
+Inside the terminal, show realistic output that demonstrates the product.
+Example: command prompts, success messages, code snippets.
+The terminal should feel like a real developer tool.
+` : `
+Show the web UI floating on an off-white/cream background. NO LAPTOP.
+Just the browser window or UI cards with soft shadows.
+Style: Clean, minimal, like Stripe or Linear marketing screenshots.
+`}
+
+IMPORTANT:
+- Include the text "${info.name}" somewhere visible in the image
+- Show realistic data, not placeholder text
+- This should look like a REAL PRODUCT SCREENSHOT, not a stock photo
+`;
+
+  if (feedback.length > 0) {
+    prompt += `\n\n## USER FEEDBACK (incorporate these changes)\n`;
+    feedback.forEach((f, i) => {
+      prompt += `${i + 1}. ${f}\n`;
+    });
+    prompt += `\nPrioritize the user's feedback over default styling.`;
+  }
+
+  return prompt;
+}
+
+/**
  * Builds the complete prompt including feedback
  * 
  * @param repo - Repository with analysis data
@@ -206,7 +278,7 @@ export async function generateCoverImage(
 ): Promise<Buffer> {
   const a = repo.analysis;
   if (!a) {
-    throw new Error('Cannot generate cover without analysis');
+    throw new Error('Cannot generate cover without analysis. Use generateCoverImageStandalone instead.');
   }
 
   info('preview', 'Generating cover', { 
@@ -263,6 +335,84 @@ export async function generateCoverImage(
     }
 
     info('preview', 'Cover generated with Gemini', { repo: repo.name });
+    return Buffer.from(imagePart.inlineData.data, 'base64');
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('Image generation timed out - try again');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Generate cover image from GitHub metadata only (no Claude analysis needed)
+ * 
+ * This is the standalone version that works for any repo without prior analysis.
+ * Uses GitHub description + language to determine visual style.
+ * 
+ * @param info - Lightweight repo info from GitHub API
+ * @param feedback - Optional feedback for regeneration
+ * @returns Generated image as Buffer
+ * 
+ * @example
+ * ```typescript
+ * const image = await generateCoverImageStandalone({
+ *   name: 'my-repo',
+ *   description: 'A CLI tool for managing configs',
+ *   language: 'Go',
+ * });
+ * ```
+ */
+export async function generateCoverImageStandalone(
+  info: LightweightRepoInfo,
+  feedback: string[] = []
+): Promise<Buffer> {
+  info('preview', 'Generating cover (standalone)', { 
+    name: info.name,
+    language: info.language,
+    feedbackCount: feedback.length,
+  });
+
+  const apiKey = getGeminiApiKey();
+  const prompt = buildPromptFromMetadata(info, feedback);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT);
+
+  try {
+    const response = await fetch(`${GEMINI_IMAGE_URL}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseModalities: ['IMAGE'],
+          imageConfig: { aspectRatio: '16:9', imageSize: '4K' },
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json() as GeminiImageResponse;
+
+    if (data.error) {
+      throw new Error(`Gemini error: ${data.error.message}`);
+    }
+
+    const imagePart = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+
+    if (!imagePart?.inlineData?.data) {
+      throw new Error('No image data in Gemini response');
+    }
+
+    info('preview', 'Cover generated (standalone)', { name: info.name });
     return Buffer.from(imagePart.inlineData.data, 'base64');
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {

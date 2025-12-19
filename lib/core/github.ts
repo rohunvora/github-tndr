@@ -87,6 +87,7 @@ export class GitHubClient {
 
   async getRepoInfo(owner: string, repo: string): Promise<{
     description: string | null;
+    language: string | null;
     stars: number;
     default_branch: string;
     homepage: string | null;
@@ -96,6 +97,7 @@ export class GitHubClient {
     try {
       const data = await this.request<{
         description: string | null;
+        language: string | null;
         stargazers_count: number;
         default_branch: string;
         homepage: string | null;
@@ -104,6 +106,7 @@ export class GitHubClient {
       }>(`/repos/${owner}/${repo}`);
       return {
         description: data.description,
+        language: data.language,
         stars: data.stargazers_count,
         default_branch: data.default_branch,
         homepage: data.homepage,
