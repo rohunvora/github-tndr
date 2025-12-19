@@ -241,7 +241,15 @@ async function runScan(ctx: Context, days: number): Promise<void> {
   } catch (err) {
     logErr('scan', err);
     await stateManager.cancelActiveScan();
-    await ctx.reply(`❌ Scan failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+    const timestamp = new Date().toISOString();
+    await ctx.reply(
+      `❌ **/scan** failed\n\n` +
+      `**Error:** \`${errorMsg}\`\n` +
+      `**Time:** ${timestamp}\n\n` +
+      `_Copy this message to debug_`,
+      { parse_mode: 'Markdown' }
+    );
   }
 }
 

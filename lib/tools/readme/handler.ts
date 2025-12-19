@@ -115,10 +115,16 @@ export async function handleReadmeCommand(ctx: Context, input: string): Promise<
 
   } catch (err) {
     logErr('readme', err, { input });
+    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+    const timestamp = new Date().toISOString();
     await ctx.api.editMessageText(
       ctx.chat!.id,
       progressMsg.message_id,
-      `❌ Failed: ${err instanceof Error ? err.message : 'Unknown error'}`
+      `❌ **/readme ${input}** failed\n\n` +
+      `**Error:** \`${errorMsg}\`\n` +
+      `**Time:** ${timestamp}\n\n` +
+      `_Copy this message to debug_`,
+      { parse_mode: 'Markdown' }
     );
   } finally {
     // Always release lock when done (success or error)

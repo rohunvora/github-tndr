@@ -211,6 +211,7 @@ export async function completeProgress(tracker: ProgressTracker): Promise<void> 
 
 /**
  * Marks progress as failed and updates the message with error
+ * Shows a clear, copy-pasteable error message for debugging
  * 
  * @param tracker - Progress tracker instance
  * @param error - Error message to display
@@ -219,11 +220,23 @@ export async function failProgress(
   tracker: ProgressTracker,
   error: string
 ): Promise<void> {
+  // Format error for easy copy-paste debugging
+  const timestamp = new Date().toISOString();
+  const lastPhase = tracker.phases.find(p => p.status === 'active')?.id || 'unknown';
+  
+  const errorMsg = `❌ **${tracker.title}** failed
+
+**Phase:** ${lastPhase}
+**Error:** \`${error}\`
+**Time:** ${timestamp}
+
+_Copy this message to debug_`;
+
   try {
     await tracker.api.editMessageText(
       tracker.chatId,
       tracker.messageId,
-      `❌ **${tracker.title}**\n\n${error}`,
+      errorMsg,
       { parse_mode: 'Markdown' }
     );
   } catch {

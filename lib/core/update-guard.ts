@@ -61,7 +61,7 @@
  */
 
 import { kv } from '@vercel/kv';
-import { info } from './logger.js';
+import { info, error as logErr } from './logger.js';
 
 // ============ CONSTANTS ============
 
@@ -70,6 +70,27 @@ const UPDATE_TTL_SECONDS = 5 * 60;
 
 /** Default TTL for command locks (2 minutes - enough for most operations) */
 const DEFAULT_LOCK_TTL_SECONDS = 120;
+
+// ============ ERROR TYPES ============
+
+/**
+ * Error thrown when update-guard operations fail
+ * Contains clear, copy-pasteable error messages for debugging
+ */
+export class UpdateGuardError extends Error {
+  public readonly operation: string;
+  public readonly key: string;
+  public readonly cause?: Error;
+
+  constructor(operation: string, key: string, cause?: Error) {
+    const msg = `[UpdateGuard] ${operation} failed for key "${key}"${cause ? `: ${cause.message}` : ''}`;
+    super(msg);
+    this.name = 'UpdateGuardError';
+    this.operation = operation;
+    this.key = key;
+    this.cause = cause;
+  }
+}
 
 // ============ UPDATE DEDUPLICATION (Layer 1) ============
 
@@ -81,11 +102,20 @@ const DEFAULT_LOCK_TTL_SECONDS = 120;
  * 
  * @param updateId - Telegram update_id from the webhook payload
  * @returns true if already processed (skip this update), false if new
+ * @throws UpdateGuardError if KV operation fails (with clear error message)
  */
 export async function isUpdateProcessed(updateId: number): Promise<boolean> {
   const key = `update:${updateId}`;
-  const exists = await kv.exists(key);
-  return exists === 1;
+  try {
+    const exists = await kv.exists(key);
+    return exists === 1;
+  } catch (err) {
+    const error = new UpdateGuardError('isUpdateProcessed', key, err instanceof Error ? err : undefined);
+    logErr('guard', error, { updateId, originalError: String(err) });
+    // On KV failure, assume NOT processed to avoid blocking legitimate requests
+    // The duplicate will just run twice (better than blocking everything)
+    return false;
+  }
 }
 
 /**
@@ -95,10 +125,18 @@ export async function isUpdateProcessed(updateId: number): Promise<boolean> {
  * The update_id is stored with a 5-minute TTL (Telegram stops retrying after ~2 min).
  * 
  * @param updateId - Telegram update_id from the webhook payload
+ * @throws UpdateGuardError if KV operation fails (with clear error message)
  */
 export async function markUpdateProcessed(updateId: number): Promise<void> {
   const key = `update:${updateId}`;
-  await kv.set(key, Date.now(), { ex: UPDATE_TTL_SECONDS });
+  try {
+    await kv.set(key, Date.now(), { ex: UPDATE_TTL_SECONDS });
+  } catch (err) {
+    const error = new UpdateGuardError('markUpdateProcessed', key, err instanceof Error ? err : undefined);
+    logErr('guard', error, { updateId, originalError: String(err) });
+    // Don't throw - failing to mark shouldn't block the request
+    // Worst case: a retry might run twice
+  }
 }
 
 // ============ COMMAND LOCKING (Layer 2) ============
@@ -135,18 +173,26 @@ export async function acquireLock(
 ): Promise<boolean> {
   const lockKey = `lock:${key}`;
   
-  // Use SET NX (set if not exists) for atomic lock acquisition
-  // Returns 'OK' if set, null if key already exists
-  const result = await kv.set(lockKey, Date.now(), { ex: ttlSeconds, nx: true });
-  
-  const acquired = result === 'OK';
-  if (acquired) {
-    info('guard', 'Lock acquired', { key, ttl: ttlSeconds });
-  } else {
-    info('guard', 'Lock denied (already held)', { key });
+  try {
+    // Use SET NX (set if not exists) for atomic lock acquisition
+    // Returns 'OK' if set, null if key already exists
+    const result = await kv.set(lockKey, Date.now(), { ex: ttlSeconds, nx: true });
+    
+    const acquired = result === 'OK';
+    if (acquired) {
+      info('guard', 'Lock acquired', { key, ttl: ttlSeconds });
+    } else {
+      info('guard', 'Lock denied (already held)', { key });
+    }
+    
+    return acquired;
+  } catch (err) {
+    const error = new UpdateGuardError('acquireLock', key, err instanceof Error ? err : undefined);
+    logErr('guard', error, { key, ttl: ttlSeconds, originalError: String(err) });
+    // On KV failure, ALLOW the operation to proceed (return true)
+    // Better to risk a duplicate than block all operations when KV is down
+    return true;
   }
-  
-  return acquired;
 }
 
 /**
@@ -159,8 +205,14 @@ export async function acquireLock(
  */
 export async function releaseLock(key: string): Promise<void> {
   const lockKey = `lock:${key}`;
-  await kv.del(lockKey);
-  info('guard', 'Lock released', { key });
+  try {
+    await kv.del(lockKey);
+    info('guard', 'Lock released', { key });
+  } catch (err) {
+    // Log but don't throw - lock will expire via TTL anyway
+    const error = new UpdateGuardError('releaseLock', key, err instanceof Error ? err : undefined);
+    logErr('guard', error, { key, originalError: String(err) });
+  }
 }
 
 /**
@@ -173,8 +225,15 @@ export async function releaseLock(key: string): Promise<void> {
  */
 export async function isLocked(key: string): Promise<boolean> {
   const lockKey = `lock:${key}`;
-  const exists = await kv.exists(lockKey);
-  return exists === 1;
+  try {
+    const exists = await kv.exists(lockKey);
+    return exists === 1;
+  } catch (err) {
+    const error = new UpdateGuardError('isLocked', key, err instanceof Error ? err : undefined);
+    logErr('guard', error, { key, originalError: String(err) });
+    // On failure, assume not locked
+    return false;
+  }
 }
 
 // ============ HELPER WRAPPER ============
@@ -214,6 +273,12 @@ export async function withLock<T>(
   
   try {
     return await fn();
+  } catch (err) {
+    // Re-throw with context for better debugging
+    if (err instanceof Error) {
+      err.message = `[withLock:${key}] ${err.message}`;
+    }
+    throw err;
   } finally {
     await releaseLock(key);
   }

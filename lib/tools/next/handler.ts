@@ -71,7 +71,15 @@ export async function handleNextCommand(ctx: Context): Promise<void> {
 
   } catch (err) {
     logErr('next', err);
-    await ctx.reply(`❌ Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+    const timestamp = new Date().toISOString();
+    await ctx.reply(
+      `❌ **/next** failed\n\n` +
+      `**Error:** \`${errorMsg}\`\n` +
+      `**Time:** ${timestamp}\n\n` +
+      `_Copy this message to debug_`,
+      { parse_mode: 'Markdown' }
+    );
   } finally {
     // Always release lock when done (success or error)
     await releaseLock(lockKey);
