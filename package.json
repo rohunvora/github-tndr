@@ -1,6 +1,7 @@
 {
   "name": "ship-or-kill-bot",
   "version": "2.0.0",
+  "type": "module",
   "description": "Telegram bot that analyzes your repos and helps you ship or kill them",
   "scripts": {
     "dev": "vercel dev",
