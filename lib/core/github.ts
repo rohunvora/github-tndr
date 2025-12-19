@@ -156,6 +156,31 @@ export class GitHubClient {
     return allRepos.filter(repo => new Date(repo.pushed_at).getTime() >= cutoff);
   }
 
+  async getPublicRepos(days = 150): Promise<GitHubRepo[]> {
+    const allRepos: GitHubRepo[] = [];
+    const cutoff = Date.now() - days * 86400000;
+    
+    for (let page = 1; page <= 3; page++) {
+      const repos = await this.request<GitHubRepo[]>(
+        `/user/repos?sort=pushed&per_page=100&page=${page}&visibility=public`
+      );
+      if (repos.length === 0) break;
+      
+      const filtered = repos.filter(repo => 
+        !repo.name.includes('.github') && 
+        !repo.private &&
+        new Date(repo.pushed_at).getTime() >= cutoff
+      );
+      allRepos.push(...filtered);
+      
+      if (repos.length < 100 || new Date(repos[repos.length - 1].pushed_at).getTime() < cutoff) {
+        break;
+      }
+    }
+    
+    return allRepos;
+  }
+
   async getOwnedRepos(days = 150, includePrivate = true): Promise<GitHubRepo[]> {
     const allRepos: GitHubRepo[] = [];
     const cutoff = Date.now() - days * 86400000;

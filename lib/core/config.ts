@@ -182,6 +182,28 @@ export function getClientForTask(taskType: TaskType): {
 }
 
 // ============================================
+// HEALTH CHECK
+// ============================================
+
+export interface AIHealthStatus {
+  anthropic: { configured: boolean; model: string };
+  google: { configured: boolean; model: string };
+}
+
+export function getAIHealthStatus(): AIHealthStatus {
+  return {
+    anthropic: {
+      configured: isProviderConfigured('anthropic'),
+      model: DEFAULT_MODELS.anthropic,
+    },
+    google: {
+      configured: isProviderConfigured('google'),
+      model: DEFAULT_MODELS.google,
+    },
+  };
+}
+
+// ============================================
 // LEGACY EXPORT (backwards compatibility)
 // ============================================
 

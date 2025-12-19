@@ -168,6 +168,31 @@ export interface RepoCard {
   stage: ProjectStage;
 }
 
+// ============ FEED SCHEMAS ============
+
+export const RepoPotentialOutputSchema = z.object({
+  potential: z.string(),
+  icp: z.string(),
+  promise: z.string(),
+  positioning_angle: z.string(),
+  confidence: z.enum(['high', 'medium', 'low']),
+  prompt_version: z.string(),
+});
+
+export const NextStepOutputSchema = z.object({
+  next_step: z.object({
+    action: z.string(),
+    source: z.enum(['readme_todo', 'user_stated', 'deploy_state', 'commit_gap', 'ai_inferred']),
+    artifact: z.object({
+      type: z.enum(['cursor_prompt', 'copy', 'checklist', 'command', 'launch_post', 'none']),
+      reason: z.string(),
+    }),
+  }),
+  why_this_now: z.string(),
+  blocking_question: z.string().nullable(),
+  confidence: z.enum(['high', 'medium', 'low']),
+});
+
 // ============ VALIDATION ============
 
 export function validateAnalysis(analysis: CoreAnalysis, fileTree: string[]): { valid: boolean; errors: string[] } {

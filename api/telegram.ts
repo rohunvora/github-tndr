@@ -3,16 +3,24 @@ export const config = { runtime: 'edge', maxDuration: 60 };
 import { Bot, InlineKeyboard, Context, InputFile } from 'grammy';
 import { kv } from '@vercel/kv';
 import type { Update, UserFromGetMe } from 'grammy/types';
-import { info, error as logErr } from '../lib/logger.js';
+
+// Core imports
+import { info, error as logErr } from '../lib/core/logger.js';
+import { stateManager } from '../lib/core/state.js';
+import { GitHubClient } from '../lib/core/github.js';
+import { getAnthropicClient } from '../lib/core/config.js';
+import type { TrackedRepo } from '../lib/core/types.js';
+
+// Tool registry
+import { registry, allTools } from '../lib/tools/index.js';
+
+// Legacy imports (to be migrated incrementally)
 import { RepoAnalyzer } from '../lib/analyzer.js';
-import { stateManager } from '../lib/state.js';
-import { GitHubClient } from '../lib/github.js';
-import { TrackedRepo } from '../lib/core-types.js';
 import { handleRepo, handleRepoDetails, handleRepoBack } from '../lib/bot/handlers/repo.js';
 import { handleWatch, handleUnwatch, handleWatching, handleMute } from '../lib/bot/handlers/watch.js';
 import {
-  formatProgress, formatScanSummary, formatCategoryView, formatStatus, formatCard, formatDetails,
-  formatCursorPrompt, formatRepoCard, formatNoMoreCards, formatCompletion,
+  formatScanSummary, formatCategoryView, formatStatus, formatCard, formatDetails,
+  formatCursorPrompt, formatRepoCard, formatNoMoreCards,
   formatShipConfirm, formatShipped, formatRepoCardWithArtifact,
   formatCardProgress, formatCardError, formatScanProgressV2, formatScanTimeout,
   GroupedRepos, CategoryKey, ScanVerdictCounts,
@@ -40,7 +48,6 @@ import {
   formatChartCaption,
   formatChartError,
 } from '../lib/chart/index.js';
-import { getAnthropicClient } from '../lib/config.js';
 
 // ============ SETUP ============
 
@@ -51,6 +58,7 @@ const chatId = process.env.USER_TELEGRAM_CHAT_ID!.trim();
 
 let analyzer: RepoAnalyzer | null = null;
 let github: GitHubClient | null = null;
+let toolsRegistered = false;
 
 function getBotInfo(token: string): UserFromGetMe {
   return {
@@ -74,6 +82,19 @@ async function showTyping(ctx: Context): Promise<void> {
   if (ctx.chat) await ctx.api.sendChatAction(ctx.chat.id, 'typing');
 }
 
+/**
+ * Initialize tool registry (called once on first request)
+ */
+async function initTools(): Promise<void> {
+  if (toolsRegistered) return;
+  
+  for (const tool of allTools) {
+    await registry.register(tool);
+  }
+  toolsRegistered = true;
+  info('telegram', 'Tools registered', { count: allTools.length });
+}
+
 // ============ COMMANDS ============
 
 bot.command('start', async (ctx) => {
@@ -92,24 +113,60 @@ bot.command('start', async (ctx) => {
 
 bot.command('help', async (ctx) => {
   await ctx.reply(`**Commands**
-/next — Get your next task card
-/scan — Analyze recent repos
-/repo <name> — Deep dive one repo
+
+📊 **Analysis**
+/repo <name> — Analyze a GitHub repo
+/scan — Batch analyze recent repos
 /status — See repo counts
+
+🎨 **Generation**
+/preview <repo> — Generate cover image
+/readme <repo> — Generate/optimize README
+
+🎴 **Feed**
+/next — Get your next task card
+
+📡 **Notifications**
 /watch <repo> — Get push notifications
 /unwatch <repo> — Stop notifications
 /watching — List watched repos
-/cancel — Cancel running scan
 
-**Chart Analysis**
-Send a chart screenshot → get TA with key zones, scenarios, and invalidation`, { parse_mode: 'Markdown' });
+📈 **Charts**
+Send a photo → get TA with key zones`, { parse_mode: 'Markdown' });
 });
+
+// ============ NEW TOOL-BASED COMMANDS ============
+
+// /preview - delegates to preview tool
+bot.command('preview', async (ctx) => {
+  if (ctx.from?.id.toString() !== chatId) return;
+  const input = (ctx.message?.text || '').replace('/preview', '').trim();
+  
+  // Use tool registry
+  const handled = await registry.handleCommand('preview', ctx, input);
+  if (!handled) {
+    await ctx.reply('Preview tool not available');
+  }
+});
+
+// /readme - delegates to readme tool
+bot.command('readme', async (ctx) => {
+  if (ctx.from?.id.toString() !== chatId) return;
+  const input = (ctx.message?.text || '').replace('/readme', '').trim();
+  
+  // Use tool registry
+  const handled = await registry.handleCommand('readme', ctx, input);
+  if (!handled) {
+    await ctx.reply('README tool not available');
+  }
+});
+
+// ============ EXISTING COMMANDS (to be migrated later) ============
 
 bot.command('next', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
   info('cmd', '/next', { from: ctx.from?.id });
 
-  // Send initial progress message
   const progressMsg = await ctx.reply('🔍 Finding your next task...', { parse_mode: 'Markdown' });
   const chatIdNum = ctx.chat!.id;
   let lastRepoName: string | undefined;
@@ -123,14 +180,13 @@ bot.command('next', async (ctx) => {
       return;
     }
 
-    // Progress callback that edits the message
     const onProgress = async (progress: { step: string; repoName?: string; stage?: string; potential?: string }) => {
       lastRepoName = progress.repoName || lastRepoName;
       try {
         await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatCardProgress(progress as Parameters<typeof formatCardProgress>[0]), {
           parse_mode: 'Markdown',
         });
-      } catch { /* rate limit or unchanged text */ }
+      } catch { /* rate limit */ }
     };
 
     const card = await getNextCard(getAnthropicClient(), getGitHub(), repos, onProgress);
@@ -145,7 +201,6 @@ bot.command('next', async (ctx) => {
     const session = await createCardSession(card);
     await markCardShown(card.full_name);
 
-    // Final update with the card and buttons
     await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatRepoCard(card), {
       parse_mode: 'Markdown',
       reply_markup: cardKeyboard(session.id, session.version),
@@ -160,7 +215,6 @@ bot.command('next', async (ctx) => {
         reply_markup: cardErrorKeyboard(),
       });
     } catch {
-      // Fallback if edit fails
       await ctx.reply(formatCardError(errorMsg, lastRepoName), {
         parse_mode: 'Markdown',
         reply_markup: cardErrorKeyboard(),
@@ -202,7 +256,6 @@ bot.command('repo', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
   const input = (ctx.message?.text || '').replace('/repo', '').trim();
   if (!input) { await ctx.reply('Usage: /repo <name> or /repo owner/name'); return; }
-  // Fire-and-forget: don't await, respond to webhook fast
   handleRepo(ctx, input).catch(err => logErr('repo', err, { input }));
 });
 
@@ -251,7 +304,6 @@ async function runScan(ctx: Context, days: number): Promise<void> {
     let lastUpdate = 0;
     let currentRepo: string | null = null;
 
-    // Track verdicts for progress display
     const verdicts: ScanVerdictCounts = { ship: 0, cut: 0, no_core: 0, dead: 0, shipped: 0 };
 
     const countVerdict = (repo: TrackedRepo) => {
@@ -263,7 +315,7 @@ async function runScan(ctx: Context, days: number): Promise<void> {
     };
 
     const updateProgress = async (force = false) => {
-      if (!force && Date.now() - lastUpdate < 500) return; // Rate limit: 500ms
+      if (!force && Date.now() - lastUpdate < 500) return;
       lastUpdate = Date.now();
       try {
         await ctx.api.editMessageText(
@@ -275,7 +327,6 @@ async function runScan(ctx: Context, days: number): Promise<void> {
       } catch { /* rate limit */ }
     };
 
-    // Initial progress
     await ctx.api.editMessageText(
       ctx.chat!.id,
       progressMsg.message_id,
@@ -298,13 +349,11 @@ async function runScan(ctx: Context, days: number): Promise<void> {
         const [owner, name] = repo.full_name.split('/');
         currentRepo = name;
 
-        // Show which repo we're working on BEFORE the slow operations
         await updateProgress();
 
         try {
           let tracked = await stateManager.getTrackedRepo(owner, name);
 
-          // Skip shipped/dead
           if (tracked?.state === 'shipped' || tracked?.state === 'dead') {
             cached++;
             countVerdict(tracked);
@@ -313,7 +362,6 @@ async function runScan(ctx: Context, days: number): Promise<void> {
             return;
           }
 
-          // Skip if no new commits
           const hasAnalysis = tracked?.analysis !== null;
           const hasNewCommits = new Date(repo.pushed_at).getTime() > (tracked?.analyzed_at ? new Date(tracked.analyzed_at).getTime() : 0);
           if (hasAnalysis && !hasNewCommits && tracked) {
@@ -324,7 +372,6 @@ async function runScan(ctx: Context, days: number): Promise<void> {
             return;
           }
 
-          // Analyze (this is the slow Claude API call)
           const analysis = await getAnalyzer().analyzeRepo(owner, name);
           tracked = {
             id: `${owner}/${name}`, name, owner,
@@ -351,7 +398,6 @@ async function runScan(ctx: Context, days: number): Promise<void> {
       return;
     }
 
-    // Show timeout message if we hit the limit
     if (hitTimeout && analyzed.length < repos.length) {
       await ctx.api.editMessageText(
         ctx.chat!.id,
@@ -394,32 +440,34 @@ bot.on('callback_query:data', async (ctx) => {
   
   info('cb', action, { data: data.substring(0, 50) });
   
-  // Session-based card actions: action:sessionId:version
-  // Note: 'back' handled separately below (can be session or repo)
+  // Try tool registry first for new tool callbacks
+  if (action.startsWith('preview_') || action.startsWith('readme_') || action.startsWith('next_')) {
+    const handled = await registry.handleCallback(data, ctx);
+    if (handled) return;
+  }
+  
+  // Session-based card actions
   const sessionActions = ['do', 'skip', 'deep', 'ship', 'shipok', 'done', 'dostep'];
   if (sessionActions.includes(action)) {
     await handleSessionAction(ctx, action, parts);
     return;
   }
   
-  // Handle 'back' - can be session-based (back:sessionId:version) or repo-based (back:owner:name)
+  // Handle 'back' - can be session-based or repo-based
   if (action === 'back') {
     const maybeVersion = parseInt(parts[2], 10);
-    // Session IDs start with 'c_' (e.g., c_abc123), owner names don't
     if (parts.length === 3 && !isNaN(maybeVersion) && parts[1].startsWith('c_')) {
-      // Session-based back (sessionId starts with c_, version is a number)
       await handleSessionAction(ctx, 'back', parts);
     } else {
-      // Repo-based back (owner:name) - handler answers callback
       await handleRepoBack(ctx, parts[1], parts[2]);
     }
     return;
   }
   
-  // Handle mute callbacks: mute:owner:name:duration
+  // Handle mute callbacks
   if (action === 'mute') {
     const fullName = `${parts[1]}/${parts[2]}`;
-    const duration = parts[3]; // 1d, 1w, or forever
+    const duration = parts[3];
     await handleMute(ctx, fullName, duration);
     return;
   }
@@ -487,13 +535,11 @@ bot.on('callback_query:data', async (ctx) => {
     return;
   }
 
-  // More for repo details (back handled above)
   if (action === 'more') {
     await handleRepoDetails(ctx, parts[1], parts[2]);
     return;
   }
 
-  // Legacy card actions and retry
   if (action === 'card_next' || action === 'card_retry') {
     await showTyping(ctx);
     const messageId = ctx.callbackQuery?.message?.message_id;
@@ -503,7 +549,6 @@ bot.on('callback_query:data', async (ctx) => {
     try {
       const repos = await stateManager.getAllTrackedRepos();
 
-      // Progress callback for streaming updates
       const onProgress = async (progress: { step: string; repoName?: string; stage?: string; potential?: string }) => {
         lastRepoName = progress.repoName || lastRepoName;
         if (messageId && chatIdNum) {
@@ -561,18 +606,15 @@ bot.on('callback_query:data', async (ctx) => {
     return;
   }
 
-  // Repo-specific actions: action:owner:name
+  // Repo-specific actions
   const owner = parts[1];
   const name = parts[2];
   const repo = await stateManager.getTrackedRepo(owner, name);
 
-  // Handle reanalyze specially - it can work on repos not yet tracked
   if (action === 'reanalyze') {
     if (repo) {
-      // Existing repo - reanalyze it
       await reanalyzeRepo(ctx, repo, getAnalyzer(), 'Re-analyzing', { clearPending: true });
     } else {
-      // New repo - analyze it for the first time (like /repo command)
       await ctx.api.sendChatAction(ctx.chat!.id, 'typing');
       await ctx.reply(`⏳ Analyzing ${name} for the first time...`);
       try {
@@ -661,107 +703,103 @@ bot.on('callback_query:data', async (ctx) => {
 
 // Session-based card action handler
 async function handleSessionAction(ctx: Context, action: string, parts: string[]): Promise<void> {
-    const sessionId = parts[1];
-    const version = parseInt(parts[2], 10);
+  const sessionId = parts[1];
+  const version = parseInt(parts[2], 10);
 
-    const messageId = ctx.callbackQuery?.message?.message_id;
-    const chatIdNum = ctx.chat?.id;
-    if (!messageId || !chatIdNum) {
-      await ctx.answerCallbackQuery({ text: 'Error' });
-      return;
-    }
+  const messageId = ctx.callbackQuery?.message?.message_id;
+  const chatIdNum = ctx.chat?.id;
+  if (!messageId || !chatIdNum) {
+    await ctx.answerCallbackQuery({ text: 'Error' });
+    return;
+  }
 
-    let session = await getCardSession(sessionId);
+  let session = await getCardSession(sessionId);
 
-    // Session recovery: if expired, try to regenerate from active_card
-    if (!session) {
-      const memory = await getFeedMemory();
-      if (memory.active_card) {
-        const [recoverOwner, recoverName] = memory.active_card.split('/');
-        const repos = await stateManager.getAllTrackedRepos();
-        const repo = repos.find(r => r.owner === recoverOwner && r.name === recoverName);
+  if (!session) {
+    const memory = await getFeedMemory();
+    if (memory.active_card) {
+      const [recoverOwner, recoverName] = memory.active_card.split('/');
+      const repos = await stateManager.getAllTrackedRepos();
+      const repo = repos.find(r => r.owner === recoverOwner && r.name === recoverName);
 
-        if (repo) {
-          try {
-            await ctx.api.editMessageText(chatIdNum, messageId, '🔄 Session expired — refreshing...', { parse_mode: 'Markdown' });
-            const card = await generateCard(getAnthropicClient(), getGitHub(), repo);
-            session = await createCardSession(card);
-            await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(card), {
-              parse_mode: 'Markdown',
-              reply_markup: cardKeyboard(session.id, session.version),
-            });
-            await ctx.answerCallbackQuery({ text: '🔄 Refreshed! Try again.' });
-            return;
-          } catch (err) {
-            logErr('session.recovery', err);
-          }
+      if (repo) {
+        try {
+          await ctx.api.editMessageText(chatIdNum, messageId, '🔄 Session expired — refreshing...', { parse_mode: 'Markdown' });
+          const card = await generateCard(getAnthropicClient(), getGitHub(), repo);
+          session = await createCardSession(card);
+          await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(card), {
+            parse_mode: 'Markdown',
+            reply_markup: cardKeyboard(session.id, session.version),
+          });
+          await ctx.answerCallbackQuery({ text: '🔄 Refreshed! Try again.' });
+          return;
+        } catch (err) {
+          logErr('session.recovery', err);
         }
       }
+    }
 
-      // Recovery failed - show error with retry option
-      await ctx.api.editMessageText(chatIdNum, messageId, '❌ Session expired\n\nUse /next to get a fresh card.', {
-        parse_mode: 'Markdown',
-        reply_markup: cardErrorKeyboard(),
-      });
-      await ctx.answerCallbackQuery({ text: 'Session expired' });
+    await ctx.api.editMessageText(chatIdNum, messageId, '❌ Session expired\n\nUse /next to get a fresh card.', {
+      parse_mode: 'Markdown',
+      reply_markup: cardErrorKeyboard(),
+    });
+    await ctx.answerCallbackQuery({ text: 'Session expired' });
+    return;
+  }
+
+  if (session.version !== version) {
+    await ctx.answerCallbackQuery({ text: 'Outdated. Card changed.' });
+    return;
+  }
+
+  const expensiveActions = ['do', 'dostep', 'deep', 'skip'];
+  const actionKey = `action:${sessionId}:${action}`;
+  if (expensiveActions.includes(action)) {
+    const inFlight = await kv.get(actionKey);
+    if (inFlight) {
+      await ctx.answerCallbackQuery({ text: '⏳ Already processing...' });
       return;
     }
+    await kv.set(actionKey, true, { ex: 60 });
+  }
 
-    if (session.version !== version) {
-      await ctx.answerCallbackQuery({ text: 'Outdated. Card changed.' });
-      return;
-    }
+  const card = session.card;
+  const [owner, name] = card.full_name.split('/');
 
-    // Idempotency: prevent button mashing for expensive actions
-    const expensiveActions = ['do', 'dostep', 'deep', 'skip'];
-    const actionKey = `action:${sessionId}:${action}`;
-    if (expensiveActions.includes(action)) {
-      const inFlight = await kv.get(actionKey);
-      if (inFlight) {
-        await ctx.answerCallbackQuery({ text: '⏳ Already processing...' });
-        return;
-      }
-      await kv.set(actionKey, true, { ex: 60 }); // 60s TTL
-    }
-
-    const card = session.card;
-    const [owner, name] = card.full_name.split('/');
-
-    // Wrap in try/finally to ensure we clear the action lock
-    try {
+  try {
     switch (action) {
-    case 'skip': {
-      await markCardSkipped(card.full_name);
+      case 'skip': {
+        await markCardSkipped(card.full_name);
         await showTyping(ctx);
         
         try {
-        const repos = await stateManager.getAllTrackedRepos();
-        const nextCard = await getNextCard(getAnthropicClient(), getGitHub(), repos);
-        
-        if (!nextCard) {
-          await ctx.api.editMessageText(chatIdNum, messageId, formatNoMoreCards(), {
-            parse_mode: 'Markdown',
-            reply_markup: noMoreCardsKeyboard(),
-          });
-        } else {
-          const newSession = await createCardSession(nextCard);
-          await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(nextCard), {
-            parse_mode: 'Markdown',
-            reply_markup: cardKeyboard(newSession.id, newSession.version),
-          });
-          await markCardShown(nextCard.full_name);
+          const repos = await stateManager.getAllTrackedRepos();
+          const nextCard = await getNextCard(getAnthropicClient(), getGitHub(), repos);
+          
+          if (!nextCard) {
+            await ctx.api.editMessageText(chatIdNum, messageId, formatNoMoreCards(), {
+              parse_mode: 'Markdown',
+              reply_markup: noMoreCardsKeyboard(),
+            });
+          } else {
+            const newSession = await createCardSession(nextCard);
+            await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(nextCard), {
+              parse_mode: 'Markdown',
+              reply_markup: cardKeyboard(newSession.id, newSession.version),
+            });
+            await markCardShown(nextCard.full_name);
+          }
+          await ctx.answerCallbackQuery({ text: '⏭️ Skipped' });
+        } catch (err) {
+          logErr('cb.skip', err);
+          await ctx.answerCallbackQuery({ text: 'Failed' });
         }
-        await ctx.answerCallbackQuery({ text: '⏭️ Skipped' });
-      } catch (err) {
-        logErr('cb.skip', err);
-        await ctx.answerCallbackQuery({ text: 'Failed' });
+        break;
       }
-      break;
-    }
 
-    case 'deep': {
-      await showTyping(ctx);
-      try {
+      case 'deep': {
+        await showTyping(ctx);
+        try {
           const [readme, fileTree] = await Promise.all([
             getGitHub().getFileContent(owner, name, 'README.md'),
             getGitHub().getRepoTree(owner, name, 30),
@@ -774,37 +812,37 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
           });
           
           const deployUrl = card.stage === 'ready_to_launch' || card.stage === 'post_launch' 
-          ? `https://${name}.vercel.app` : null;
+            ? `https://${name}.vercel.app` : null;
           
           const newSession = await updateCardSession(sessionId, { view: 'deep' });
-        await ctx.api.editMessageText(chatIdNum, messageId, formatDeepDiveMessage(deepDive, name, deployUrl), {
-              parse_mode: 'Markdown', 
-              reply_markup: deepDiveKeyboard(sessionId, newSession!.version),
-        });
+          await ctx.api.editMessageText(chatIdNum, messageId, formatDeepDiveMessage(deepDive, name, deployUrl), {
+            parse_mode: 'Markdown', 
+            reply_markup: deepDiveKeyboard(sessionId, newSession!.version),
+          });
           await ctx.answerCallbackQuery();
-      } catch (err) {
-        logErr('cb.deep', err);
-        await ctx.answerCallbackQuery({ text: 'Failed' });
+        } catch (err) {
+          logErr('cb.deep', err);
+          await ctx.answerCallbackQuery({ text: 'Failed' });
         }
         break;
       }
       
       case 'back': {
         const newSession = await updateCardSession(sessionId, { view: 'card' });
-      await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(card), {
-            parse_mode: 'Markdown', 
-            reply_markup: cardKeyboard(sessionId, newSession!.version),
-      });
+        await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(card), {
+          parse_mode: 'Markdown', 
+          reply_markup: cardKeyboard(sessionId, newSession!.version),
+        });
         await ctx.answerCallbackQuery();
         break;
       }
       
       case 'ship': {
         const newSession = await updateCardSession(sessionId, { view: 'confirm_ship' });
-      await ctx.api.editMessageText(chatIdNum, messageId, formatShipConfirm(card.repo), {
-            parse_mode: 'Markdown', 
-            reply_markup: shipConfirmKeyboard(sessionId, newSession!.version),
-      });
+        await ctx.api.editMessageText(chatIdNum, messageId, formatShipConfirm(card.repo), {
+          parse_mode: 'Markdown', 
+          reply_markup: shipConfirmKeyboard(sessionId, newSession!.version),
+        });
         await ctx.answerCallbackQuery();
         break;
       }
@@ -812,7 +850,7 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
       case 'shipok': {
         await stateManager.updateRepoState(owner, name, 'shipped');
         await clearIntention(card.full_name);
-      await ctx.api.editMessageText(chatIdNum, messageId, formatShipped(card.repo), { parse_mode: 'Markdown' });
+        await ctx.api.editMessageText(chatIdNum, messageId, formatShipped(card.repo), { parse_mode: 'Markdown' });
         await ctx.answerCallbackQuery({ text: '🚀 Shipped!' });
         break;
       }
@@ -822,7 +860,7 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
         await showTyping(ctx);
         try {
           let artifactText = '';
-        const artifactType = card.next_step.artifact.type;
+          const artifactType = card.next_step.artifact.type;
           
           switch (artifactType) {
             case 'cursor_prompt': {
@@ -856,21 +894,21 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
               break;
             }
             default: {
-            artifactText = `**${card.next_step.action}**\n\n_Complete this step and tap Done._`;
+              artifactText = `**${card.next_step.action}**\n\n_Complete this step and tap Done._`;
             }
           }
           
-        await ctx.reply(artifactText, { parse_mode: 'Markdown', reply_to_message_id: messageId });
+          await ctx.reply(artifactText, { parse_mode: 'Markdown', reply_to_message_id: messageId });
           
           const newSession = await updateCardSession(sessionId, { view: 'card' });
-        await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCardWithArtifact(card), {
-              parse_mode: 'Markdown', 
-              reply_markup: afterDoItKeyboard(sessionId, newSession!.version),
-        });
+          await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCardWithArtifact(card), {
+            parse_mode: 'Markdown', 
+            reply_markup: afterDoItKeyboard(sessionId, newSession!.version),
+          });
           await ctx.answerCallbackQuery({ text: '⚡ Generated' });
-      } catch (err) {
-        logErr('cb.do', err);
-        await ctx.answerCallbackQuery({ text: 'Failed' });
+        } catch (err) {
+          logErr('cb.do', err);
+          await ctx.answerCallbackQuery({ text: 'Failed' });
         }
         break;
       }
@@ -890,27 +928,26 @@ async function handleSessionAction(ctx: Context, action: string, parts: string[]
             });
           } else {
             const newSession = await createCardSession(nextCard);
-          await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(nextCard), {
-                parse_mode: 'Markdown', 
-                reply_markup: cardKeyboard(newSession.id, newSession.version),
-          });
+            await ctx.api.editMessageText(chatIdNum, messageId, formatRepoCard(nextCard), {
+              parse_mode: 'Markdown', 
+              reply_markup: cardKeyboard(newSession.id, newSession.version),
+            });
             await markCardShown(nextCard.full_name);
           }
           await ctx.answerCallbackQuery({ text: '✅ Done!' });
-      } catch (err) {
-        logErr('cb.done', err);
-        await ctx.answerCallbackQuery({ text: 'Failed' });
+        } catch (err) {
+          logErr('cb.done', err);
+          await ctx.answerCallbackQuery({ text: 'Failed' });
         }
         break;
       }
     }
-    } finally {
-      // Clear the action lock for expensive operations
-      if (expensiveActions.includes(action)) {
-        await kv.del(actionKey);
-      }
+  } finally {
+    if (expensiveActions.includes(action)) {
+      await kv.del(actionKey);
     }
   }
+}
   
 // Helper keyboard for repo card view
 function repoKeyboard(repo: TrackedRepo): InlineKeyboard {
@@ -938,15 +975,12 @@ bot.on('message:photo', async (ctx) => {
 
   const chatIdNum = ctx.chat!.id;
   
-  // Progress message with streaming updates
   const progressMsg = await ctx.reply('📥 Downloading chart...', { parse_mode: 'Markdown' });
 
   try {
-    // Get the largest photo (last in array)
     const photos = ctx.message.photo;
     const largestPhoto = photos[photos.length - 1];
     
-    // Download the photo
     const file = await ctx.api.getFile(largestPhoto.file_id);
     const filePath = file.file_path;
     if (!filePath) {
@@ -954,7 +988,6 @@ bot.on('message:photo', async (ctx) => {
       return;
     }
 
-    // Fetch the actual file
     const fileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${filePath}`;
     const response = await fetch(fileUrl);
     if (!response.ok) {
@@ -962,13 +995,11 @@ bot.on('message:photo', async (ctx) => {
       return;
     }
 
-    // Convert to base64
     const arrayBuffer = await response.arrayBuffer();
     const base64 = Buffer.from(arrayBuffer).toString('base64');
 
     info('photo', 'Image downloaded', { size: `${(base64.length / 1024).toFixed(1)}KB` });
 
-    // Step 1: Extract levels
     await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, '📊 Extracting levels...');
 
     const analysis = await analyzeChart(base64);
@@ -983,7 +1014,6 @@ bot.on('message:photo', async (ctx) => {
       return;
     }
 
-    // Step 2: Annotate chart
     await ctx.api.editMessageText(
       chatIdNum, 
       progressMsg.message_id, 
@@ -997,14 +1027,12 @@ bot.on('message:photo', async (ctx) => {
       return;
     }
 
-    // Send annotated image
     const imageBuffer = Buffer.from(annotatedBase64, 'base64');
     await ctx.replyWithPhoto(new InputFile(imageBuffer, 'chart-annotated.png'), {
       caption: formatChartCaption(analysis),
       parse_mode: 'Markdown',
     });
 
-    // Delete progress message after image is sent
     try {
       await ctx.api.deleteMessage(chatIdNum, progressMsg.message_id);
     } catch {
@@ -1039,7 +1067,6 @@ bot.on('message:text', async (ctx) => {
 
   const lower = text.toLowerCase().trim();
 
-  // Repo name lookup
   const allRepos = await stateManager.getAllTrackedRepos();
   const matched = allRepos.find(r => 
     r.name.toLowerCase() === lower || 
@@ -1061,6 +1088,9 @@ bot.on('message:text', async (ctx) => {
 
 export default async function handler(req: Request) {
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+
+  // Initialize tools on first request
+  await initTools();
 
   try {
     const update = await req.json() as Update;
