@@ -18,6 +18,7 @@ import {
   type ScanVerdictCounts,
   type GroupedRepos,
 } from './format.js';
+import { acquireLock, releaseLock } from '../../core/update-guard.js';
 
 // GitHub singleton
 let github: GitHubClient | null = null;
@@ -35,16 +36,29 @@ function getGitHub(): GitHubClient {
 export async function handleScanCommand(ctx: Context, args: string): Promise<void> {
   info('scan', '/scan', { args });
   
-  const activeScan = await stateManager.getActiveScan();
-  if (activeScan) {
-    await ctx.reply('⏳ Scan already running. Use `/cancel` to stop.', { parse_mode: 'Markdown' });
+  // Layer 2: Command-level lock prevents concurrent scans (in addition to activeScan check)
+  // This catches Telegram retries before they can even check activeScan state
+  const lockKey = `scan:${ctx.chat!.id}`;
+  if (!await acquireLock(lockKey, 120)) {  // 2 min TTL
+    await ctx.reply('⏳ Scan already running...');
     return;
   }
   
-  const daysMatch = args.match(/(\d+)/);
-  const days = daysMatch ? parseInt(daysMatch[1], 10) : 10;
-  
-  await runScan(ctx, days);
+  try {
+    const activeScan = await stateManager.getActiveScan();
+    if (activeScan) {
+      await ctx.reply('⏳ Scan already running. Use `/cancel` to stop.', { parse_mode: 'Markdown' });
+      return;
+    }
+    
+    const daysMatch = args.match(/(\d+)/);
+    const days = daysMatch ? parseInt(daysMatch[1], 10) : 10;
+    
+    await runScan(ctx, days);
+  } finally {
+    // Always release lock when done (success or error)
+    await releaseLock(lockKey);
+  }
 }
 
 /**

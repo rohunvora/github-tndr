@@ -12,7 +12,7 @@ import { getAnthropicClient } from '../lib/core/config.js';
 import type { TrackedRepo } from '../lib/core/types.js';
 import { normalizeRepoInput } from '../lib/utils/github-url.js';
 import { linkRegistry, allLinkHandlers } from '../lib/links/index.js';
-import { shouldProcessUpdate } from '../lib/core/update-guard.js';
+import { shouldProcessUpdate, acquireLock, releaseLock } from '../lib/core/update-guard.js';
 
 // Tool registry
 import { registry, allTools } from '../lib/tools/index.js';
@@ -179,6 +179,14 @@ bot.command('readme', async (ctx) => {
 
 bot.command('next', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
+  
+  // Layer 2: Command-level lock prevents concurrent /next card generation
+  const lockKey = `next:${ctx.chat!.id}`;
+  if (!await acquireLock(lockKey, 90)) {  // 90s TTL
+    await ctx.reply('⏳ Already finding your next task...');
+    return;
+  }
+  
   info('cmd', '/next', { from: ctx.from?.id });
 
   const progressMsg = await ctx.reply('🔍 Finding your next task...', { parse_mode: 'Markdown' });
@@ -234,21 +242,38 @@ bot.command('next', async (ctx) => {
         reply_markup: cardErrorKeyboard(),
       });
     }
+  } finally {
+    // Always release lock when done (success or error)
+    await releaseLock(lockKey);
   }
 });
 
 bot.command('scan', async (ctx) => {
   if (ctx.from?.id.toString() !== chatId) return;
-  info('cmd', '/scan', { from: ctx.from?.id });
   
-  const activeScan = await stateManager.getActiveScan();
-  if (activeScan) {
-    await ctx.reply('⏳ Scan already running. /cancel to stop.');
+  // Layer 2: Command-level lock prevents concurrent scans from Telegram retries
+  const lockKey = `scan:${ctx.chat!.id}`;
+  if (!await acquireLock(lockKey, 120)) {  // 2 min TTL
+    await ctx.reply('⏳ Scan already running...');
     return;
   }
   
-  const daysMatch = (ctx.message?.text || '').match(/\/scan\s+(\d+)/);
-  await runScan(ctx, daysMatch ? parseInt(daysMatch[1], 10) : 10);
+  info('cmd', '/scan', { from: ctx.from?.id });
+  
+  try {
+    const activeScan = await stateManager.getActiveScan();
+    if (activeScan) {
+      await ctx.reply('⏳ Scan already running. /cancel to stop.');
+      return;
+    }
+    
+    const daysMatch = (ctx.message?.text || '').match(/\/scan\s+(\d+)/);
+    await runScan(ctx, daysMatch ? parseInt(daysMatch[1], 10) : 10);
+  } finally {
+    // Note: runScan handles its own cleanup via stateManager.cancelActiveScan()
+    // We release the lock here to allow new scans after completion
+    await releaseLock(lockKey);
+  }
 });
 
 bot.command('cancel', async (ctx) => {

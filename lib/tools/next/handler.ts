@@ -28,6 +28,13 @@ const sessions = new Map<string, CarouselSession>();
  * Handle /next command
  */
 export async function handleNextCommand(ctx: Context): Promise<void> {
+  // Layer 2: Command-level lock prevents concurrent /next card generation
+  const lockKey = `next:${ctx.chat!.id}`;
+  if (!await acquireLock(lockKey, 60)) {  // 1 min TTL (next is faster than preview)
+    await ctx.reply('⏳ Already finding your next task...');
+    return;
+  }
+
   info('next', '/next');
 
   try {
@@ -65,6 +72,9 @@ export async function handleNextCommand(ctx: Context): Promise<void> {
   } catch (err) {
     logErr('next', err);
     await ctx.reply(`❌ Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+  } finally {
+    // Always release lock when done (success or error)
+    await releaseLock(lockKey);
   }
 }
 
