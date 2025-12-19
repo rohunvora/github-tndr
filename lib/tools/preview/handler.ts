@@ -33,8 +33,7 @@ import { InputFile, InlineKeyboard } from 'grammy';
 import { info, error as logErr } from '../../core/logger.js';
 import { stateManager } from '../../core/state.js';
 import { GitHubClient } from '../../core/github.js';
-import type { TrackedRepo, CoreAnalysis, RepoState } from '../../core/types.js';
-import { getRepoAnalyzer } from '../repo/analyzer.js';
+import type { TrackedRepo } from '../../core/types.js';
 import { acquireLock, releaseLock } from '../../core/update-guard.js';
 import { 
   createProgressTracker, 
@@ -102,30 +101,28 @@ export async function handlePreviewCommand(ctx: Context, input: string): Promise
     const { owner, name } = await resolveRepo(input);
     info('preview', 'Resolved', { owner, name });
 
-    // 2. FETCH - Get repo info from GitHub
-    await updateProgress(tracker, 'fetching');
-    const repoInfo = await getGitHub().getRepoInfo(owner, name);
-    if (!repoInfo) {
-      throw new Error(`Repo "${owner}/${name}" not found or private`);
-    }
-
-    // 3. ANALYZE - Run analysis if not already done
-    let repo = await stateManager.getTrackedRepo(owner, name);
+    // 2. CHECK FOR EXISTING ANALYSIS - Required before generating cover
+    const repo = await stateManager.getTrackedRepo(owner, name);
     
     if (!repo?.analysis) {
-      await updateProgress(tracker, 'analyzing', 'Claude');
-      info('preview', 'No prior analysis, running now', { owner, name });
-      
-      const analysis = await getRepoAnalyzer().analyzeRepo(owner, name);
-      repo = await saveTrackedRepo(owner, name, analysis, repoInfo);
-      
-      info('preview', 'Analysis complete', { owner, name, verdict: analysis.verdict });
-    } else {
-      await skipPhase(tracker, 'analyzing');
-      info('preview', 'Using cached analysis', { owner, name, verdict: repo.analysis.verdict });
+      // No analysis - tell user to run TLDR first
+      await completeProgress(tracker);
+      await ctx.reply(
+        `📸 **${name}** needs analysis first\n\n` +
+        `Run TLDR to analyze, then generate cover:\n` +
+        `1. Paste the GitHub link\n` +
+        `2. Tap 📸 TLDR\n` +
+        `3. Then tap 🎨 Cover`,
+        { parse_mode: 'Markdown' }
+      );
+      info('preview', 'No analysis, skipping', { owner, name });
+      return;
     }
+    
+    await skipPhase(tracker, 'analyzing');
+    info('preview', 'Using cached analysis', { owner, name, verdict: repo.analysis.verdict });
 
-    // 4. GENERATE - Create cover image
+    // 3. GENERATE - Create cover image (the only slow part now, ~30s)
     await updateProgress(tracker, 'generating', 'Gemini');
     const imageBuffer = await generateCoverImage(repo, []);
 
@@ -252,47 +249,4 @@ async function resolveRepo(input: string): Promise<{ owner: string; name: string
   }
   
   return { owner: found.full_name.split('/')[0], name: found.name };
-}
-
-/**
- * Maps analysis verdict to repo state
- */
-function verdictToState(verdict: CoreAnalysis['verdict']): RepoState {
-  switch (verdict) {
-    case 'ship': return 'ready';
-    case 'cut_to_core': return 'has_core';
-    case 'no_core': return 'no_core';
-    case 'dead': return 'dead';
-    default: return 'ready';
-  }
-}
-
-/**
- * Saves or updates a tracked repo with analysis data
- */
-async function saveTrackedRepo(
-  owner: string,
-  name: string,
-  analysis: CoreAnalysis,
-  repoInfo: { pushed_at: string; homepage: string | null }
-): Promise<TrackedRepo> {
-  const tracked: TrackedRepo = {
-    id: `${owner}/${name}`,
-    name,
-    owner,
-    state: verdictToState(analysis.verdict),
-    analysis,
-    analyzed_at: new Date().toISOString(),
-    pending_action: null,
-    pending_since: null,
-    last_message_id: null,
-    last_push_at: repoInfo.pushed_at,
-    killed_at: null,
-    shipped_at: null,
-    cover_image_url: null,
-    homepage: repoInfo.homepage,
-  };
-  
-  await stateManager.saveTrackedRepo(tracked);
-  return tracked;
 }
