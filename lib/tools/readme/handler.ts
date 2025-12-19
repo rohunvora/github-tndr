@@ -9,6 +9,7 @@ import { info, error as logErr } from '../../core/logger.js';
 import { stateManager } from '../../core/state.js';
 import { GitHubClient } from '../../core/github.js';
 import { generateReadme } from './generator.js';
+import { acquireLock, releaseLock } from '../../core/update-guard.js';
 
 // Store pending READMEs
 const pendingReadmes = new Map<string, {
@@ -26,22 +27,30 @@ export async function handleReadmeCommand(ctx: Context, input: string): Promise<
     return;
   }
 
-  info('readme', 'Starting', { input });
-
-  // Resolve repo
-  const { owner, name } = await resolveRepo(input);
-
-  // Get tracked repo
-  const tracked = await stateManager.getTrackedRepo(owner, name);
-  if (!tracked?.analysis) {
-    await ctx.reply(`❌ Repo "${owner}/${name}" not analyzed. Run \`/repo ${input}\` first.`, { parse_mode: 'Markdown' });
+  // Layer 2: Command-level lock prevents concurrent README generation for same repo
+  const lockKey = `readme:${ctx.chat!.id}:${input.toLowerCase()}`;
+  if (!await acquireLock(lockKey, 120)) {  // 2 min TTL
+    await ctx.reply('⏳ Already generating README for this repo...');
     return;
   }
+
+  info('readme', 'Starting', { input });
 
   // Show progress
   const progressMsg = await ctx.reply('📝 Generating README...');
   
   try {
+    // Resolve repo
+    const { owner, name } = await resolveRepo(input);
+
+    // Get tracked repo
+    const tracked = await stateManager.getTrackedRepo(owner, name);
+    if (!tracked?.analysis) {
+      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, 
+        `❌ Repo "${owner}/${name}" not analyzed. Run \`/repo ${input}\` first.`);
+      return;
+    }
+
     const github = new GitHubClient(process.env.GITHUB_TOKEN!);
 
     // Fetch context
@@ -111,6 +120,9 @@ export async function handleReadmeCommand(ctx: Context, input: string): Promise<
       progressMsg.message_id,
       `❌ Failed: ${err instanceof Error ? err.message : 'Unknown error'}`
     );
+  } finally {
+    // Always release lock when done (success or error)
+    await releaseLock(lockKey);
   }
 }
 

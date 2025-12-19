@@ -35,6 +35,7 @@ import { stateManager } from '../../core/state.js';
 import { GitHubClient } from '../../core/github.js';
 import type { TrackedRepo, CoreAnalysis, RepoState } from '../../core/types.js';
 import { getRepoAnalyzer } from '../repo/analyzer.js';
+import { acquireLock, releaseLock } from '../../core/update-guard.js';
 import { 
   createProgressTracker, 
   updateProgress, 
@@ -79,6 +80,14 @@ export async function handlePreviewCommand(ctx: Context, input: string): Promise
       'Generates a cover image for your repo and uploads it to GitHub.',
       { parse_mode: 'Markdown' }
     );
+    return;
+  }
+
+  // Layer 2: Command-level lock prevents concurrent preview generation for same repo
+  // This catches cases where user sends /preview twice quickly, or different update_ids
+  const lockKey = `preview:${ctx.chat!.id}:${input.toLowerCase()}`;
+  if (!await acquireLock(lockKey, 120)) {  // 2 min TTL
+    await ctx.reply('⏳ Already generating preview for this repo...');
     return;
   }
 
@@ -139,6 +148,9 @@ export async function handlePreviewCommand(ctx: Context, input: string): Promise
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
     logErr('preview', err, { input });
     await failProgress(tracker, errorMessage);
+  } finally {
+    // Always release lock when done (success or error)
+    await releaseLock(lockKey);
   }
 }
 

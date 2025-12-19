@@ -12,6 +12,7 @@ import {
   formatSelected,
   carouselKeyboard,
 } from './format.js';
+import { acquireLock, releaseLock } from '../../core/update-guard.js';
 
 // Store carousel sessions
 interface CarouselSession {

@@ -10,7 +10,9 @@ import { stateManager } from '../lib/core/state.js';
 import { GitHubClient } from '../lib/core/github.js';
 import { getAnthropicClient } from '../lib/core/config.js';
 import type { TrackedRepo } from '../lib/core/types.js';
-import { parseGitHubUrl, isGitHubUrl, normalizeRepoInput } from '../lib/utils/github-url.js';
+import { normalizeRepoInput } from '../lib/utils/github-url.js';
+import { linkRegistry, allLinkHandlers } from '../lib/links/index.js';
+import { shouldProcessUpdate } from '../lib/core/update-guard.js';
 
 // Tool registry
 import { registry, allTools } from '../lib/tools/index.js';
@@ -84,16 +86,23 @@ async function showTyping(ctx: Context): Promise<void> {
 }
 
 /**
- * Initialize tool registry (called once on first request)
+ * Initialize tool registry and link handlers (called once on first request)
  */
 async function initTools(): Promise<void> {
   if (toolsRegistered) return;
   
+  // Register tools
   for (const tool of allTools) {
     await registry.register(tool);
   }
+  
+  // Register link handlers
+  for (const handler of allLinkHandlers) {
+    await linkRegistry.register(handler);
+  }
+  
   toolsRegistered = true;
-  info('telegram', 'Tools registered', { count: allTools.length });
+  info('telegram', 'Initialized', { tools: allTools.length, linkHandlers: allLinkHandlers.length });
 }
 
 // ============ COMMANDS ============
@@ -454,41 +463,10 @@ bot.on('callback_query:data', async (ctx) => {
     if (handled) return;
   }
   
-  // Handle repo link menu actions (from pasted GitHub URLs)
-  if (action.startsWith('repolink_')) {
-    const subAction = action.replace('repolink_', '');
-    const owner = parts[1];
-    const name = parts[2];
-    const repoInput = `${owner}/${name}`;
-    
-    await ctx.answerCallbackQuery();
-    
-    switch (subAction) {
-      case 'analyze':
-        // Delete the menu message and run analyze
-        try { await ctx.deleteMessage(); } catch { /* ok */ }
-        await handleRepo(ctx, repoInput);
-        break;
-        
-      case 'preview':
-        // Delete the menu and run preview
-        try { await ctx.deleteMessage(); } catch { /* ok */ }
-        await registry.handleCommand('preview', ctx, repoInput);
-        break;
-        
-      case 'readme':
-        // Delete the menu and run readme
-        try { await ctx.deleteMessage(); } catch { /* ok */ }
-        await registry.handleCommand('readme', ctx, repoInput);
-        break;
-        
-      case 'watch':
-        // Delete the menu and run watch
-        try { await ctx.deleteMessage(); } catch { /* ok */ }
-        await handleWatch(ctx, repoInput);
-        break;
-    }
-    return;
+  // Try link registry for link action callbacks (link_github_*, link_twitter_*, etc.)
+  if (data.startsWith('link_')) {
+    const handled = await linkRegistry.handleCallback(ctx, data);
+    if (handled) return;
   }
   
   // Session-based card actions
@@ -1109,33 +1087,6 @@ bot.on('message:photo', async (ctx) => {
 // Import feedback handler for preview tool
 import { handleFeedbackReply } from '../lib/tools/preview/feedback.js';
 
-/**
- * Create action menu keyboard for a GitHub repo link
- * Shows available actions based on whether we've seen this repo before
- */
-function repoLinkKeyboard(owner: string, name: string, isTracked: boolean, state?: string): InlineKeyboard {
-  const id = `${owner}:${name}`;
-  const kb = new InlineKeyboard();
-  
-  // Primary actions row
-  kb.text('🔍 Analyze', `repolink_analyze:${id}`);
-  kb.text('🎨 Preview', `repolink_preview:${id}`);
-  kb.row();
-  
-  // Secondary actions
-  kb.text('📝 README', `repolink_readme:${id}`);
-  kb.text('👁️ Watch', `repolink_watch:${id}`);
-  
-  // Show status hint if tracked
-  if (isTracked && state) {
-    const stateEmoji = state === 'shipped' ? '🚀' : state === 'ready' ? '✅' : state === 'dead' ? '☠️' : '📊';
-    kb.row();
-    kb.text(`${stateEmoji} View Status`, `repo:${id}`);
-  }
-  
-  return kb;
-}
-
 bot.on('message:text', async (ctx) => {
   const text = ctx.message.text;
   if (ctx.from?.id.toString() !== chatId || text.startsWith('/')) return;
@@ -1150,34 +1101,14 @@ bot.on('message:text', async (ctx) => {
     // Continue to other handlers if feedback handling fails
   }
 
-  // Smart GitHub link detection
-  if (isGitHubUrl(text)) {
-    const parsed = parseGitHubUrl(text);
-    if (parsed) {
-      info('link', 'GitHub URL detected', { owner: parsed.owner, name: parsed.name });
-      
-      // Check if we already track this repo
-      const tracked = await stateManager.getTrackedRepo(parsed.owner, parsed.name);
-      
-      let statusLine = '';
-      if (tracked) {
-        const stateLabel = tracked.state === 'shipped' ? 'Shipped 🚀' 
-          : tracked.state === 'ready' ? 'Ready to ship'
-          : tracked.state === 'has_core' ? 'Needs focus'
-          : tracked.state === 'dead' ? 'Dead'
-          : 'Analyzed';
-        statusLine = `\n_${stateLabel}_`;
-      }
-      
-      await ctx.reply(
-        `**${parsed.owner}/${parsed.name}**${statusLine}\n\nWhat would you like to do?`,
-        { 
-          parse_mode: 'Markdown', 
-          reply_markup: repoLinkKeyboard(parsed.owner, parsed.name, !!tracked, tracked?.state),
-        }
-      );
-      return;
-    }
+  // Smart link detection - delegates to link registry
+  // Handles GitHub URLs, and can be extended for Twitter, npm, etc.
+  try {
+    const linkHandled = await linkRegistry.handleMessage(ctx, text);
+    if (linkHandled) return;
+  } catch (err) {
+    logErr('link', err);
+    // Continue to other handlers if link handling fails
   }
 
   const lower = text.toLowerCase().trim();
@@ -1209,6 +1140,15 @@ export default async function handler(req: Request) {
 
   try {
     const update = await req.json() as Update;
+    
+    // Layer 1: Skip duplicate updates (Telegram retries after ~30s timeout)
+    // This prevents the "looping progress messages" bug when handlers take too long
+    if (!await shouldProcessUpdate(update.update_id)) {
+      return new Response(JSON.stringify({ ok: true, skipped: 'duplicate' }), { 
+        headers: { 'Content-Type': 'application/json' } 
+      });
+    }
+    
     info('webhook', 'Update', {
       type: update.message ? 'msg' : update.callback_query ? 'cb' : '?',
       from: update.message?.from?.id || update.callback_query?.from?.id,
