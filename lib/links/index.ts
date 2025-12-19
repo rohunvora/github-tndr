@@ -11,8 +11,12 @@ export * from './registry.js';
 // Import all handlers
 import { githubLinkHandler } from './handlers/github.js';
 
-// Export individual handlers
+// Export individual handlers and utilities
 export { githubLinkHandler };
+export { 
+  buildGitHubRepoKeyboard, 
+  buildGitHubRepoKeyboardRaw,
+} from './handlers/github.js';
 
 /**
  * All link handlers to register

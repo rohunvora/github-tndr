@@ -2,6 +2,7 @@ export const config = { runtime: 'edge', maxDuration: 30 };
 
 import { info, error as logErr } from '../lib/logger.js';
 import { stateManager } from '../lib/state.js';
+import { buildGitHubRepoKeyboardRaw } from '../lib/links/index.js';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const CHAT_ID = process.env.USER_TELEGRAM_CHAT_ID!;
@@ -96,23 +97,6 @@ async function sendTelegram(text: string, replyMarkup?: object): Promise<void> {
   }
 }
 
-/**
- * Create keyboard for push notification
- */
-function pushKeyboard(fullName: string) {
-  const [owner, name] = fullName.split('/');
-  return {
-    inline_keyboard: [
-      [
-        { text: '🔇 Mute 1d', callback_data: `mute:${owner}:${name}:1d` },
-        { text: '🔇 Mute 1w', callback_data: `mute:${owner}:${name}:1w` },
-      ],
-      [
-        { text: '📋 Analyze', callback_data: `reanalyze:${owner}:${name}` },
-      ],
-    ],
-  };
-}
 
 /**
  * Format a simple push notification (no AI, just commit summary)
@@ -259,12 +243,16 @@ export default async function handler(req: Request) {
     }
     
     // Format simple push notification (no AI - saves costs)
-    // Use "Analyze" button for AI insight when needed
+    // Use TLDR button for AI insight when needed
     const message = formatSimplePush(repoName, fullName, push.commits);
     
+    // Build keyboard with same actions as link detection (TLDR, Preview, README, Status)
+    const [owner, name] = fullName.split('/');
+    const keyboard = await buildGitHubRepoKeyboardRaw(owner, name);
+    
     // Send notification
-    info('webhook.push', 'Sending simple notification', { fullName, commits: push.commits.length });
-    await sendTelegram(message, pushKeyboard(fullName));
+    info('webhook.push', 'Sending notification', { fullName, commits: push.commits.length });
+    await sendTelegram(message, keyboard);
     
     return new Response(JSON.stringify({ ok: true, notified: true }), {
       headers: { 'Content-Type': 'application/json' },

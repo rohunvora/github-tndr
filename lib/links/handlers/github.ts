@@ -73,6 +73,77 @@ const verdictLabel: Record<string, string> = {
   dead: 'DEAD',
 };
 
+// ============ Shared Keyboard Builder ============
+
+/**
+ * Build the GitHub repo action keyboard
+ * Reusable across: link detection, push notifications, etc.
+ * 
+ * @param owner - Repo owner
+ * @param name - Repo name  
+ * @param isTracked - Whether we have analysis for this repo
+ * @param state - Current repo state (if tracked)
+ */
+export function buildGitHubRepoKeyboard(
+  owner: string, 
+  name: string, 
+  isTracked: boolean,
+  state?: string
+): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  
+  // Primary actions row - TLDR is the main action
+  kb.text('📸 TLDR', formatLinkCallback('github', 'tldr', owner, name));
+  kb.text('🎨 Preview', formatLinkCallback('github', 'preview', owner, name));
+  kb.row();
+  
+  // Secondary actions
+  kb.text('📝 README', formatLinkCallback('github', 'readme', owner, name));
+  
+  // Show status if already tracked
+  if (isTracked && state) {
+    const stateEmoji = state === 'shipped' ? '🚀' 
+      : state === 'ready' ? '✅' 
+      : state === 'dead' ? '☠️' 
+      : '📊';
+    kb.text(`${stateEmoji} Status`, formatLinkCallback('github', 'status', owner, name));
+  }
+  
+  return kb;
+}
+
+/**
+ * Build keyboard as plain object (for use in raw Telegram API calls)
+ * Used by webhook handler which doesn't have Grammy context
+ */
+export async function buildGitHubRepoKeyboardRaw(
+  owner: string,
+  name: string
+): Promise<{ inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }> {
+  // Check if tracked
+  const tracked = await stateManager.getTrackedRepo(owner, name);
+  
+  const row1 = [
+    { text: '📸 TLDR', callback_data: formatLinkCallback('github', 'tldr', owner, name) },
+    { text: '🎨 Preview', callback_data: formatLinkCallback('github', 'preview', owner, name) },
+  ];
+  
+  const row2: Array<{ text: string; callback_data: string }> = [
+    { text: '📝 README', callback_data: formatLinkCallback('github', 'readme', owner, name) },
+  ];
+  
+  // Add status button if tracked
+  if (tracked) {
+    const stateEmoji = tracked.state === 'shipped' ? '🚀' 
+      : tracked.state === 'ready' ? '✅' 
+      : tracked.state === 'dead' ? '☠️' 
+      : '📊';
+    row2.push({ text: `${stateEmoji} Status`, callback_data: formatLinkCallback('github', 'status', owner, name) });
+  }
+  
+  return { inline_keyboard: [row1, row2] };
+}
+
 // ============ Handler Implementation ============
 
 export const githubLinkHandler: LinkHandler<GitHubLinkData> = {
@@ -100,29 +171,8 @@ export const githubLinkHandler: LinkHandler<GitHubLinkData> = {
   
   getKeyboard: async (link: ParsedLink<GitHubLinkData>, ctx: Context): Promise<InlineKeyboard> => {
     const { owner, name } = link.data;
-    const kb = new InlineKeyboard();
-    
-    // Check if we already track this repo
     const tracked = await stateManager.getTrackedRepo(owner, name);
-    
-    // Primary actions row - TLDR is the main action
-    kb.text('📸 TLDR', formatLinkCallback('github', 'tldr', owner, name));
-    kb.text('🎨 Preview', formatLinkCallback('github', 'preview', owner, name));
-    kb.row();
-    
-    // Secondary actions
-    kb.text('📝 README', formatLinkCallback('github', 'readme', owner, name));
-    
-    // Show status if already tracked
-    if (tracked) {
-      const stateEmoji = tracked.state === 'shipped' ? '🚀' 
-        : tracked.state === 'ready' ? '✅' 
-        : tracked.state === 'dead' ? '☠️' 
-        : '📊';
-      kb.text(`${stateEmoji} Status`, formatLinkCallback('github', 'status', owner, name));
-    }
-    
-    return kb;
+    return buildGitHubRepoKeyboard(owner, name, !!tracked, tracked?.state);
   },
   
   formatMessage: async (link: ParsedLink<GitHubLinkData>, ctx: Context): Promise<string> => {
