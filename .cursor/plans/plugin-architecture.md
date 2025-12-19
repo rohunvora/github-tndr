@@ -170,10 +170,11 @@ GitHub Actions auto-creates PRs when synced files change.
 - [x] `readme/` — extracted from readme-generator.ts
 - [x] `next/` — new carousel UX implementation
 
-### Phase 3: Slim Down Router 🔄 (Next)
-- [ ] Refactor `api/telegram.ts` to use registry
-- [ ] Move all command handlers to tools
-- [ ] All logic delegates to tool registry
+### Phase 3: Slim Down Router ✅
+- [x] Refactor `api/telegram.ts` to use registry
+- [x] New commands (`/preview`, `/readme`) use tool registry
+- [x] Legacy files re-export from core for backwards compatibility
+- [x] TypeScript compiles successfully
 
 ### Phase 4: Sync Workflows 📋 (Planned)
 - [ ] `.github/workflows/sync-to-bel-rtr.yml`
