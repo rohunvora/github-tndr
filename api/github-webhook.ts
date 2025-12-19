@@ -246,9 +246,9 @@ export default async function handler(req: Request) {
     // Use TLDR button for AI insight when needed
     const message = formatSimplePush(repoName, fullName, push.commits);
     
-    // Build keyboard with same actions as link detection (TLDR, Preview, README, Status)
+    // Build keyboard with same actions as link detection (TLDR, Preview, README)
     const [owner, name] = fullName.split('/');
-    const keyboard = await buildGitHubRepoKeyboardRaw(owner, name);
+    const keyboard = buildGitHubRepoKeyboardRaw(owner, name);
     
     // Send notification
     info('webhook.push', 'Sending notification', { fullName, commits: push.commits.length });
