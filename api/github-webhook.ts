@@ -120,7 +120,9 @@ function pushKeyboard(fullName: string) {
  */
 function formatSimplePush(
   repoName: string,
+  fullName: string,
   commits: Array<{
+    id: string;
     message: string;
     added: string[];
     removed: string[];
@@ -128,7 +130,21 @@ function formatSimplePush(
   }>
 ): string {
   const lines: string[] = [];
-  lines.push(`⚡ **${repoName}** pushed`);
+  
+  // Link to commit (single) or compare view (multiple)
+  const headSha = commits[0]?.id;
+  const tailSha = commits[commits.length - 1]?.id;
+  let link: string;
+  if (commits.length === 1 && headSha) {
+    link = `https://github.com/${fullName}/commit/${headSha}`;
+  } else if (headSha && tailSha) {
+    // Compare from oldest to newest (tail...head)
+    link = `https://github.com/${fullName}/compare/${tailSha.slice(0, 7)}^...${headSha.slice(0, 7)}`;
+  } else {
+    link = `https://github.com/${fullName}`;
+  }
+  
+  lines.push(`⚡ [**${repoName}**](${link}) pushed`);
   lines.push('');
   
   // Show up to 5 commits
@@ -244,7 +260,7 @@ export default async function handler(req: Request) {
     
     // Format simple push notification (no AI - saves costs)
     // Use "Analyze" button for AI insight when needed
-    const message = formatSimplePush(repoName, push.commits);
+    const message = formatSimplePush(repoName, fullName, push.commits);
     
     // Send notification
     info('webhook.push', 'Sending simple notification', { fullName, commits: push.commits.length });
