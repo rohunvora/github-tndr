@@ -4,12 +4,20 @@
  */
 
 import { getAnthropicClient, MODELS } from '../../core/config.js';
-import { GitHubClient, type GitHubRepo } from '../../core/github.js';
 import type { CoreAnalysis } from '../../core/types.js';
-import { info, error as logErr } from '../../core/logger.js';
+import { info } from '../../core/logger.js';
+
+/**
+ * Minimal repo info needed for README generation
+ * Only name and description are used in the template
+ */
+export interface ReadmeRepoInfo {
+  name: string;
+  description: string | null;
+}
 
 export interface ReadmeContext {
-  repo: GitHubRepo;
+  repo: ReadmeRepoInfo;
   analysis: CoreAnalysis;
   existingReadme: string | null;
   packageJson: string | null;

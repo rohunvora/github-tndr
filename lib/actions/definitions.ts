@@ -211,9 +211,9 @@ export const readmeAction: Action = {
     if (!repoInfo) {
       return { success: false, repo, error: 'Could not fetch repo info' };
     }
-    
+
     const readme = await generateReadme({
-      repo: repoInfo,
+      repo: { name, description: repoInfo.description },
       analysis: repo.analysis,
       existingReadme,
       packageJson,

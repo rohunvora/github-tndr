@@ -172,7 +172,7 @@ export async function executeAction(
       if (!result.success) {
         actionProgress.status = 'error';
         await updateProgressMessage(ctx, progress);
-        logErr('actions', `${actName}: failed`, result.error);
+        logErr('actions', result.error || `${actName}: failed`);
         return result;
       }
 

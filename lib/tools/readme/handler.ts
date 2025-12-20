@@ -68,20 +68,7 @@ export async function handleReadmeCommand(ctx: Context, input: string): Promise<
 
     // Generate README
     const readme = await generateReadme({
-      repo: {
-        id: 0,
-        name,
-        full_name: `${owner}/${name}`,
-        description: repoInfo.description,
-        updated_at: '',
-        pushed_at: repoInfo.pushed_at,
-        default_branch: repoInfo.default_branch,
-        homepage: repoInfo.homepage,
-        topics: [],
-        private: false,
-        stargazers_count: repoInfo.stars,
-        size: 0,
-      },
+      repo: { name, description: repoInfo.description },
       analysis: tracked.analysis,
       existingReadme,
       packageJson,
