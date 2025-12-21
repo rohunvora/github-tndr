@@ -17,4 +17,7 @@ conversation-*.md
 # OS files
 .DS_Store
 Thumbs.db
+
+# Output & archive (local only)
 output/
+archive/
