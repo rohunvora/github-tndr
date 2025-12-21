@@ -5,9 +5,9 @@
 
 import { getAnthropicClient, AI_MODEL } from '../../core/config.js';
 import { GitHubClient } from '../../core/github.js';
-import { CoreAnalysis, CoreAnalysisSchema, validateAnalysis } from '../../core/types.js';
+import { CoreAnalysis, CoreAnalysisSchema, validateAnalysis, TrackedRepo } from '../../core/types.js';
 import { info, error as logErr } from '../../core/logger.js';
-import { buildAnalysisPrompt, buildRetryPrompt } from './prompts.js';
+import { buildAnalysisPrompt, buildRetryPrompt, buildTweetPrompt } from './prompts.js';
 
 export class RepoAnalyzer {
   private github: GitHubClient;
@@ -76,7 +76,7 @@ export class RepoAnalyzer {
 
   private async retryAnalysis(previousResponse: string): Promise<CoreAnalysis> {
     const anthropic = getAnthropicClient();
-    
+
     const response = await anthropic.messages.create({
       model: AI_MODEL,
       max_tokens: 2000,
@@ -94,6 +94,40 @@ export class RepoAnalyzer {
       json = json.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
     }
     return CoreAnalysisSchema.parse(JSON.parse(json));
+  }
+
+  /**
+   * Regenerate tweet with a specific tone
+   */
+  async regenerateTweet(repo: TrackedRepo, tone: string): Promise<string> {
+    const analysis = repo.analysis;
+    if (!analysis) throw new Error('No analysis available');
+
+    const anthropic = getAnthropicClient();
+
+    const response = await anthropic.messages.create({
+      model: AI_MODEL,
+      max_tokens: 100,
+      temperature: 0.8,
+      messages: [{
+        role: 'user',
+        content: buildTweetPrompt({
+          name: repo.name,
+          oneLiner: analysis.one_liner,
+          coreValue: analysis.core_value || analysis.what_it_does,
+          existingTweet: analysis.tweet_draft || undefined,
+          tone,
+        }),
+      }],
+    });
+
+    const text = response.content.find(c => c.type === 'text');
+    if (!text || text.type !== 'text') {
+      return analysis.tweet_draft || analysis.one_liner;
+    }
+
+    const tweet = text.text.trim();
+    return tweet.length > 280 ? tweet.substring(0, 277) + '...' : tweet;
   }
 }
 

@@ -1,7 +1,7 @@
 export const config = { runtime: 'edge', maxDuration: 30 };
 
-import { info, error as logErr } from '../lib/logger.js';
-import { stateManager } from '../lib/state.js';
+import { info, error as logErr } from '../lib/core/logger.js';
+import { stateManager } from '../lib/core/state.js';
 import { buildGitHubRepoKeyboardRaw } from '../lib/links/index.js';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;

@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { RepoPotential } from '../core-types.js';
+import { RepoPotential } from '../core/types.js';
 import { SHARED_PREAMBLE, parseJsonResponse } from './shared-preamble.js';
-import { AI_MODEL } from '../config.js';
+import { AI_MODEL } from '../core/config.js';
 
 interface CopyInput {
   potential: RepoPotential;

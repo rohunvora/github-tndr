@@ -2,7 +2,7 @@ export const config = {
   runtime: 'edge',
 };
 
-import { getAIHealthStatus, TASK_ROUTING } from '../lib/config.js';
+import { getAIHealthStatus, TASK_ROUTING } from '../lib/core/config.js';
 
 // Health check endpoint to debug configuration
 export default async function handler(req: Request) {

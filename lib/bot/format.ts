@@ -1,7 +1,7 @@
 // Telegram message formatters
 // Principle: Scannable > Comprehensive
 
-import { TrackedRepo, RepoState, RepoCard, ProjectStage } from '../core-types.js';
+import { TrackedRepo, RepoState, RepoCard, ProjectStage } from '../core/types.js';
 import { CardProgress } from '../card-generator.js';
 
 // ============ TYPES ============

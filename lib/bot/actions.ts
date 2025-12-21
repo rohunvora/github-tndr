@@ -1,7 +1,7 @@
 import type { Context } from 'grammy';
-import { RepoAnalyzer } from '../analyzer.js';
-import { stateManager } from '../state.js';
-import { TrackedRepo, RepoState, Verdict } from '../core-types.js';
+import { RepoAnalyzer } from '../tools/repo/analyzer.js';
+import { stateManager } from '../core/state.js';
+import { TrackedRepo, RepoState, Verdict } from '../core/types.js';
 import { formatAnalysis } from './format.js';
 import { analysisKeyboard } from './keyboards.js';
 

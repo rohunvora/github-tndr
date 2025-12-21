@@ -2,7 +2,7 @@ export const config = {
   runtime: 'edge',
 };
 
-import { stateManager } from '../lib/state.js';
+import { stateManager } from '../lib/core/state.js';
 
 // Debug endpoint to view tracked repos
 export default async function handler() {

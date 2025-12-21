@@ -7,7 +7,7 @@
 
 import type { Action, ActionResult, ActionContext } from './types.js';
 import type { TrackedRepo, CoreAnalysis } from '../core/types.js';
-import { RepoAnalyzer } from '../analyzer.js';
+import { getRepoAnalyzer } from '../tools/repo/analyzer.js';
 import { GitHubClient } from '../core/github.js';
 import { stateManager } from '../core/state.js';
 import { generateCoverImage, generateCoverImageStandalone, type LightweightRepoInfo } from '../tools/preview/generator.js';
@@ -40,12 +40,8 @@ export const analyzeAction: Action = {
     const { owner, name, repo, ctx } = actx;
     
     info('action.analyze', 'Starting analysis', { owner, name });
-    
-    const analyzer = new RepoAnalyzer(
-      process.env.ANTHROPIC_API_KEY!,
-      process.env.GITHUB_TOKEN!
-    );
-    
+
+    const analyzer = getRepoAnalyzer();
     const analysis = await analyzer.analyzeRepo(owner, name);
     
     // Determine new state based on verdict

@@ -17,8 +17,10 @@ import { shouldProcessUpdate, acquireLock, releaseLock } from '../lib/core/updat
 // Tool registry
 import { registry, allTools } from '../lib/tools/index.js';
 
+// Repo analyzer
+import { getRepoAnalyzer, RepoAnalyzer } from '../lib/tools/repo/analyzer.js';
+
 // Legacy imports (to be migrated incrementally)
-import { RepoAnalyzer } from '../lib/analyzer.js';
 import { handleRepo, handleRepoDetails, handleRepoBack } from '../lib/bot/handlers/repo.js';
 import { handleMute } from '../lib/bot/handlers/watch.js';
 import {
@@ -55,7 +57,6 @@ const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN!, {
 });
 const chatId = process.env.USER_TELEGRAM_CHAT_ID!.trim();
 
-let analyzer: RepoAnalyzer | null = null;
 let github: GitHubClient | null = null;
 let toolsRegistered = false;
 
@@ -68,8 +69,7 @@ function getBotInfo(token: string): UserFromGetMe {
 }
 
 function getAnalyzer(): RepoAnalyzer {
-  if (!analyzer) analyzer = new RepoAnalyzer(process.env.ANTHROPIC_API_KEY!, process.env.GITHUB_TOKEN!);
-  return analyzer;
+  return getRepoAnalyzer();
 }
 
 function getGitHub(): GitHubClient {

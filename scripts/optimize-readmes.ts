@@ -15,11 +15,11 @@
 import 'dotenv/config';
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
-import { GitHubClient } from '../lib/github.js';
-import { RepoAnalyzer } from '../lib/analyzer.js';
+import { GitHubClient } from '../lib/core/github.js';
+import { getRepoAnalyzer } from '../lib/tools/repo/analyzer.js';
 import { ReadmeGenerator, ReadmeContext, formatReadmeFilename } from '../lib/readme-generator.js';
 import { scoreAndSortRepos, RepoPromiseScore } from '../lib/promise-scorer.js';
-import { CoreAnalysis, TrackedRepo } from '../lib/core-types.js';
+import { CoreAnalysis, TrackedRepo } from '../lib/core/types.js';
 import { generateRepoCover, polishScreenshot } from '../lib/nano-banana.js';
 import { screenshotUrl, isUrlAccessible, closeBrowser } from '../lib/screenshot.js';
 
@@ -116,7 +116,7 @@ async function main() {
   // Initialize clients
   log('Initializing API clients...');
   const github = new GitHubClient(githubToken);
-  const analyzer = new RepoAnalyzer(anthropicKey, githubToken);
+  const analyzer = getRepoAnalyzer();
   const readmeGen = new ReadmeGenerator(anthropicKey);
   log('✅ Clients initialized');
 

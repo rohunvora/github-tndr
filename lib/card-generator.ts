@@ -1,9 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { kv } from '@vercel/kv';
-import { TrackedRepo, RepoCard, RepoPotential, FeedMemory } from './core-types.js';
+import { TrackedRepo, RepoCard, RepoPotential, FeedMemory } from './core/types.js';
 import { generateRepoPotential, generateLastContext, generateNextStep } from './ai/index.js';
 import { computeProjectStage, getDeployState, computePackagingChecks, parseReadmeTodos, getDaysSince, isNewDay } from './deterministic-checks.js';
-import { GitHubClient } from './github.js';
+import { GitHubClient } from './core/github.js';
 
 // Progress callback for streaming UI updates
 export type CardProgressStep =

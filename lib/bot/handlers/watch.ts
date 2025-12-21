@@ -1,6 +1,6 @@
 import { Context } from 'grammy';
-import { info, error as logErr } from '../../logger.js';
-import { stateManager } from '../../state.js';
+import { info, error as logErr } from '../../core/logger.js';
+import { stateManager } from '../../core/state.js';
 
 /**
  * Handle /watch <repo> - enable push notifications for a repo
@@ -88,7 +88,7 @@ export async function handleWatching(ctx: Context): Promise<void> {
       return;
     }
     
-    const list = watched.map(r => `• ${r}`).join('\n');
+    const list = watched.map((r: string) => `• ${r}`).join('\n');
     await ctx.reply(`👁️ **Watching ${watched.length} repos:**\n\n${list}\n\nUse /unwatch <repo> to stop.`, {
       parse_mode: 'Markdown',
     });

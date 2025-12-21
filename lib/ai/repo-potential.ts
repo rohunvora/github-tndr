@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { RepoPotential, RepoPotentialOutputSchema } from '../core-types.js';
+import { RepoPotential, RepoPotentialOutputSchema } from '../core/types.js';
 import { SHARED_PREAMBLE, wrapUntrustedContent, parseJsonResponse } from './shared-preamble.js';
-import { AI_MODEL } from '../config.js';
+import { AI_MODEL } from '../core/config.js';
 
 const PROMPT_VERSION = 'repoPotential_v1';
 

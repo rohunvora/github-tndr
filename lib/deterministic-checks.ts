@@ -1,4 +1,4 @@
-import { TrackedRepo, ProjectStage, DeployState, PackagingChecks } from './core-types.js';
+import { TrackedRepo, ProjectStage, DeployState, PackagingChecks } from './core/types.js';
 
 /**
  * Compute project stage based on deterministic checks

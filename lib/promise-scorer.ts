@@ -1,4 +1,4 @@
-import { GitHubRepo, GitHubClient } from './github.js';
+import { GitHubRepo, GitHubClient } from './core/github.js';
 
 export interface RepoPromiseScore {
   repo: GitHubRepo;

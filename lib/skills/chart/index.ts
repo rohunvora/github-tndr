@@ -16,10 +16,10 @@ import {
   formatChartCaption,
   formatChartError,
   type ChartAnalysis,
-} from '../../chart/index.js';
+} from '../../tools/chart/index.js';
 
 // Re-export types for convenience
-export type { ChartAnalysis } from '../../chart/index.js';
+export type { ChartAnalysis } from '../../tools/chart/index.js';
 
 // ============ INPUT/OUTPUT TYPES ============
 

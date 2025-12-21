@@ -1,5 +1,5 @@
-import { info, error as logErr } from '../logger.js';
-import { getGoogleClient, MODELS } from '../config.js';
+import { info, error as logErr } from '../../core/logger.js';
+import { getGoogleClient, MODELS } from '../../core/config.js';
 
 // ============================================
 // TYPES

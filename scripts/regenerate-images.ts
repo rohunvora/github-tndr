@@ -15,7 +15,7 @@ import 'dotenv/config';
 import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { generateRepoCover } from '../lib/nano-banana.js';
-import { TrackedRepo } from '../lib/core-types.js';
+import { TrackedRepo } from '../lib/core/types.js';
 
 const IMAGES_DIR = join(process.cwd(), 'output', 'images');
 const BACKUP_DIR = join(process.cwd(), 'output', 'images_backup');

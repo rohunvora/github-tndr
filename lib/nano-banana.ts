@@ -19,7 +19,7 @@
  */
 
 import { generateCoverImage, polishScreenshot } from './tools/preview/generator.js';
-import type { TrackedRepo } from './core-types.js';
+import type { TrackedRepo } from './core/types.js';
 
 /**
  * @deprecated Use generateCoverImage from './tools/preview/generator.js' instead

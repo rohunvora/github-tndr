@@ -1,25 +1,14 @@
 import { Context } from 'grammy';
 import { InlineKeyboard } from 'grammy';
-import { info, error as logErr } from '../../logger.js';
-import { TrackedRepo } from '../../core-types.js';
-import { GitHubClient } from '../../github.js';
-import { RepoAnalyzer } from '../../analyzer.js';
-import { stateManager } from '../../state.js';
+import { info, error as logErr } from '../../core/logger.js';
+import { TrackedRepo } from '../../core/types.js';
+import { GitHubClient } from '../../core/github.js';
+import { getRepoAnalyzer } from '../../tools/repo/analyzer.js';
+import { stateManager } from '../../core/state.js';
 import { formatCard, formatDetails } from '../format.js';
 
 // Singleton instances (initialized on first use)
-let analyzer: RepoAnalyzer | null = null;
 let github: GitHubClient | null = null;
-
-function getAnalyzer(): RepoAnalyzer {
-  if (!analyzer) {
-    analyzer = new RepoAnalyzer(
-      process.env.ANTHROPIC_API_KEY!,
-      process.env.GITHUB_TOKEN!
-    );
-  }
-  return analyzer;
-}
 
 function getGitHub(): GitHubClient {
   if (!github) {
@@ -142,7 +131,7 @@ export async function handleRepo(ctx: Context, input: string): Promise<void> {
 
     // Phase 3: Analyze (longest phase - may trigger heartbeat)
     info('repo', 'Analyzing', { owner, name });
-    const analysis = await getAnalyzer().analyzeRepo(owner, name);
+    const analysis = await getRepoAnalyzer().analyzeRepo(owner, name);
     info('repo', 'Analysis complete', { owner, name, verdict: analysis.verdict });
     await updateProgress(ctx, state, 'formatting');
 

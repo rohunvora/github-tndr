@@ -12,10 +12,10 @@
 import 'dotenv/config';
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { GitHubClient } from '../lib/github.js';
-import { RepoAnalyzer } from '../lib/analyzer.js';
+import { GitHubClient } from '../lib/core/github.js';
+import { getRepoAnalyzer } from '../lib/tools/repo/analyzer.js';
 import { generateRepoCover } from '../lib/nano-banana.js';
-import { TrackedRepo } from '../lib/core-types.js';
+import { TrackedRepo } from '../lib/core/types.js';
 
 // Repos to generate covers for (user-owned repos missing .github/social-preview.png)
 const TARGET_REPOS = ['bel-rtr', 'hl-analyzer', 'cursortimer', 'iqmode'];
@@ -99,8 +99,8 @@ async function main() {
     mkdirSync(IMAGES_DIR, { recursive: true });
   }
 
-  const github = new GitHubClient(process.env.GITHUB_TOKEN);
-  const analyzer = new RepoAnalyzer(process.env.ANTHROPIC_API_KEY!, process.env.GITHUB_TOKEN!);
+  const github = new GitHubClient(process.env.GITHUB_TOKEN!);
+  const analyzer = getRepoAnalyzer();
 
   let success = 0;
   let failed = 0;

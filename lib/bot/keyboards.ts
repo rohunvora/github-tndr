@@ -1,5 +1,5 @@
 import { InlineKeyboard } from 'grammy';
-import { TrackedRepo, RepoCard } from '../core-types.js';
+import { TrackedRepo, RepoCard } from '../core/types.js';
 import { GroupedRepos, CategoryKey } from './format.js';
 
 export function summaryKeyboard(groups: GroupedRepos): InlineKeyboard {

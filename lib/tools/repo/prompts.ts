@@ -155,3 +155,35 @@ ${previousResponse.substring(0, 500)}
 }`;
 }
 
+// ============ TWEET PROMPTS ============
+
+export const TONE_INSTRUCTIONS: Record<string, string> = {
+  casual: 'Relaxed, like texting a friend. Use contractions.',
+  pro: 'Professional but not corporate. Clear and confident.',
+  tech: 'For developers. Technical terms OK. Concise.',
+  hype: 'Energetic but authentic. No cringe.',
+};
+
+export function buildTweetPrompt(ctx: {
+  name: string;
+  oneLiner: string;
+  coreValue: string;
+  existingTweet?: string;
+  tone?: string;
+}): string {
+  const toneInstruction = ctx.tone ? TONE_INSTRUCTIONS[ctx.tone] || TONE_INSTRUCTIONS.casual : '';
+
+  return `${ctx.tone ? `Rewrite this tweet with a ${ctx.tone} tone.` : 'Write a short, punchy tweet to launch this project.'}
+
+Project: ${ctx.name}
+What it does: ${ctx.oneLiner}
+Core value: ${ctx.coreValue}
+${ctx.existingTweet ? `Original: ${ctx.existingTweet}` : ''}
+
+${toneInstruction ? `Tone: ${toneInstruction}` : ''}
+
+Rules: Under 280 chars, no hashtags, no emojis (or one max), sound like a real person.
+
+Just the tweet text.`;
+}
+

@@ -1,5 +1,5 @@
 import { kv } from '@vercel/kv';
-import { RepoCard } from './core-types.js';
+import { RepoCard } from './core/types.js';
 
 export interface CardSession {
   id: string;                                    // Short ID: "c_9f3a2b"

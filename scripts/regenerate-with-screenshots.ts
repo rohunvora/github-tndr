@@ -12,8 +12,8 @@ import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync } from
 import { join } from 'path';
 import { generateRepoCover, polishScreenshot } from '../lib/nano-banana.js';
 import { screenshotUrl, isUrlAccessible, closeBrowser } from '../lib/screenshot.js';
-import { GitHubClient } from '../lib/github.js';
-import { TrackedRepo } from '../lib/core-types.js';
+import { GitHubClient } from '../lib/core/github.js';
+import { TrackedRepo } from '../lib/core/types.js';
 
 const IMAGES_DIR = join(process.cwd(), 'output', 'images');
 const BACKUP_DIR = join(process.cwd(), 'output', 'images_backup');

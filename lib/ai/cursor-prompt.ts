@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { CursorPromptOutputSchema } from '../core-types.js';
+import { CursorPromptOutputSchema } from '../core/types.js';
 import { SHARED_PREAMBLE, wrapUntrustedContent, parseJsonResponse } from './shared-preamble.js';
-import { AI_MODEL } from '../config.js';
+import { AI_MODEL } from '../core/config.js';
 
 interface CursorPromptInput {
   repo_name: string;

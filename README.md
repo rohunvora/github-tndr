@@ -72,28 +72,60 @@ Bot: ━━━ crypto-dashboard ━━━
      [✂️ Cut] [☠️ Kill] [📋 More]
 ```
 
-## Plugin Architecture
-
-Each tool is **isolated** — tweak one without breaking others:
+## Architecture
 
 ```
 lib/
 ├── core/                    # Shared infrastructure
-│   ├── config.ts            # AI providers, env vars
+│   ├── config.ts            # AI providers (Anthropic, Google)
 │   ├── github.ts            # GitHub API client
-│   ├── state.ts             # Vercel KV state
-│   └── types.ts             # Shared types
+│   ├── state.ts             # Vercel KV state manager
+│   ├── types.ts             # Shared types & Zod schemas
+│   └── logger.ts            # Structured logging
 │
-└── tools/                   # Self-contained tools
-    ├── chart/               # Photo → chart analysis
-    ├── repo/                # /repo command
-    ├── scan/                # /scan command
-    ├── preview/             # /preview command
-    ├── readme/              # /readme command
-    └── next/                # /next carousel
+├── tools/                   # Self-contained business logic
+│   ├── chart/               # Chart photo analysis (Gemini Vision)
+│   ├── repo/                # Repository analyzer (Claude)
+│   ├── scan/                # Batch repo scanning
+│   ├── preview/             # Cover image generation (Gemini)
+│   ├── readme/              # README generation (Claude)
+│   └── next/                # Project prioritization
+│
+├── skills/                  # Testable wrappers around tools
+│   ├── _shared/             # Common skill infrastructure
+│   ├── chart/               # chartSkill
+│   ├── repo/                # repoSkill
+│   ├── scan/                # scanSkill
+│   ├── preview/             # previewSkill
+│   ├── readme/              # readmeSkill
+│   └── next/                # nextSkill
+│
+├── ai/                      # AI function modules
+│   ├── repo-potential.ts    # Generate potential positioning
+│   ├── next-step.ts         # Determine next action
+│   ├── cursor-prompt.ts     # Generate Cursor prompts
+│   └── ...
+│
+├── bot/                     # Telegram bot infrastructure
+│   ├── format.ts            # Message formatting
+│   ├── keyboards.ts         # Inline keyboards
+│   └── handlers/            # Command & callback handlers
+│
+└── links/                   # URL detection & handling
+    └── handlers/            # GitHub, chart, etc.
+
+api/                         # Vercel Edge Functions
+├── telegram.ts              # Main bot webhook
+├── github-webhook.ts        # Push notifications
+└── health.ts                # Status endpoint
 ```
 
-See [plugin-architecture.md](.cursor/plans/plugin-architecture.md) for full details.
+### Design Principles
+
+1. **Tools are pure logic** — Each tool in `lib/tools/` does one thing well with no Telegram dependencies
+2. **Skills wrap tools** — `lib/skills/` adds progress tracking, error handling, and testability
+3. **Dependency injection** — Skills receive clients/configs, tools use singletons
+4. **Type safety** — Zod schemas validate all AI responses
 
 ## Setup
 

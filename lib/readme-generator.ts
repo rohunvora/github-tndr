@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { CoreAnalysis } from './core-types.js';
-import { GitHubRepo } from './github.js';
-import { AI_MODEL } from './config.js';
+import { CoreAnalysis } from './core/types.js';
+import { GitHubRepo } from './core/github.js';
+import { AI_MODEL } from './core/config.js';
 
 export interface ReadmeContext {
   repo: GitHubRepo;
