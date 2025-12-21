@@ -5,14 +5,24 @@
 
 import type { Context } from 'grammy';
 import { info, error as logErr } from '../../core/logger.js';
-import { getProjectCandidates, type ProjectCandidate } from './selector.js';
+import { GitHubClient } from '../../core/github.js';
+import { nextSkill, type ProjectCandidate } from '../../skills/next/index.js';
 import {
   formatCarouselCard,
-  formatNoProjects,
   formatSelected,
   carouselKeyboard,
 } from './format.js';
 import { acquireLock, releaseLock } from '../../core/update-guard.js';
+
+// GitHub singleton
+let github: GitHubClient | null = null;
+
+function getGitHub(): GitHubClient {
+  if (!github) {
+    github = new GitHubClient(process.env.GITHUB_TOKEN!);
+  }
+  return github;
+}
 
 // Store carousel sessions
 interface CarouselSession {
@@ -38,11 +48,24 @@ export async function handleNextCommand(ctx: Context): Promise<void> {
   info('next', '/next');
 
   try {
-    // Get candidates
-    const candidates = await getProjectCandidates();
+    // Get candidates via skill
+    const result = await nextSkill.run({}, {
+      github: getGitHub(),
+      anthropic: {} as never,
+      gemini: {} as never,
+      kv: {} as never,
+      telegram: {} as never,
+      sessions: {} as never,
+    });
+
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to get candidates');
+    }
+
+    const { candidates, noProjectsMessage } = result.data!;
 
     if (candidates.length === 0) {
-      await ctx.reply(formatNoProjects(), { parse_mode: 'Markdown' });
+      await ctx.reply(noProjectsMessage || 'No active projects found.', { parse_mode: 'Markdown' });
       return;
     }
 

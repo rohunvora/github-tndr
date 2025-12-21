@@ -44,7 +44,7 @@ import {
   failProgress,
 } from './progress.js';
 import { createSession, getSession, deleteSession } from './sessions.js';
-import { generateCoverImage, generateCoverImageStandalone } from './generator.js';
+import { previewSkill } from '../../skills/preview/index.js';
 import { uploadToGitHub, getSettingsUrl } from './upload.js';
 import { handleRejectButton, sendPreviewImage } from './feedback.js';
 
@@ -121,21 +121,33 @@ export async function handlePreviewCommand(ctx: Context, input: string): Promise
       info('preview', 'No analysis, using GitHub metadata', { owner, name });
     }
 
-    // 4. GENERATE - Create cover image
-    // Use full analysis if available, otherwise use lightweight GitHub metadata
+    // 4. GENERATE - Create cover image using skill
     await updateProgress(tracker, 'generating', 'Gemini');
-    
-    let imageBuffer: Buffer;
-    if (hasAnalysis && repo) {
-      imageBuffer = await generateCoverImage(repo, []);
-    } else {
-      // Standalone generation using just GitHub metadata (~30s, within timeout)
-      imageBuffer = await generateCoverImageStandalone({
+
+    const skillResult = await previewSkill.run({
+      owner,
+      name,
+      trackedRepo: hasAnalysis ? repo! : undefined,
+      repoInfo: {
         name,
         description: repoInfo.description,
         language: repoInfo.language,
-      }, []);
+      },
+    }, {
+      // Minimal context - skill uses global clients internally
+      github: getGitHub(),
+      anthropic: {} as never,
+      gemini: {} as never,
+      kv: {} as never,
+      telegram: {} as never,
+      sessions: {} as never,
+    });
+
+    if (!skillResult.success) {
+      throw new Error(skillResult.error || 'Image generation failed');
     }
+
+    const imageBuffer = skillResult.data!.imageBuffer;
 
     // 5. SHOW PREVIEW - Delete progress, send image with buttons
     await completeProgress(tracker);

@@ -17,7 +17,7 @@ import type { Context } from 'grammy';
 import { InputFile, InlineKeyboard } from 'grammy';
 import { kv } from '@vercel/kv';
 import { getSession, updateSession } from './sessions.js';
-import { generateCoverImage } from './generator.js';
+import { previewSkill } from '../../skills/preview/index.js';
 import { stateManager } from '../../core/state.js';
 import { info, error as logErr } from '../../core/logger.js';
 
@@ -144,13 +144,32 @@ export async function handleFeedbackReply(ctx: Context): Promise<boolean> {
   );
 
   try {
-    // Get repo and regenerate
+    // Get repo and regenerate using skill
     const repo = await stateManager.getTrackedRepo(session.owner, session.name);
     if (!repo?.analysis) {
       throw new Error('Repo analysis not found');
     }
 
-    const newImage = await generateCoverImage(repo, updatedFeedback);
+    const skillResult = await previewSkill.run({
+      owner: session.owner,
+      name: session.name,
+      trackedRepo: repo,
+      feedback: updatedFeedback,
+    }, {
+      // Minimal context - skill uses global clients internally
+      github: {} as never,
+      anthropic: {} as never,
+      gemini: {} as never,
+      kv: {} as never,
+      telegram: {} as never,
+      sessions: {} as never,
+    });
+
+    if (!skillResult.success) {
+      throw new Error(skillResult.error || 'Regeneration failed');
+    }
+
+    const newImage = skillResult.data!.imageBuffer;
 
     // Update session with new image
     await updateSession(pending.sessionId, {

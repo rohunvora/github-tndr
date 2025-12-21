@@ -8,8 +8,8 @@ import { info, error as logErr } from '../../core/logger.js';
 import { stateManager } from '../../core/state.js';
 import { GitHubClient } from '../../core/github.js';
 import type { TrackedRepo } from '../../core/types.js';
-import { getRepoAnalyzer } from './analyzer.js';
-import { formatCard, formatDetails, formatProgressMessage, verdictToState } from './format.js';
+import { repoSkill } from '../../skills/repo/index.js';
+import { formatCard, formatDetails, formatProgressMessage } from './format.js';
 
 // Progress state
 type Phase = 'resolving' | 'fetching' | 'analyzing' | 'formatting' | 'done';
@@ -104,7 +104,7 @@ export async function handleRepoCommand(ctx: Context, input: string): Promise<vo
     info('repo', 'Resolved', { owner, name });
     await updateProgress(ctx, state, 'fetching');
 
-    // Fetch info
+    // Fetch info to validate repo exists
     const repoInfo = await getGitHub().getRepoInfo(owner, name);
     if (!repoInfo) {
       await ctx.api.editMessageText(state.chatId, state.messageId, `❌ "${owner}/${name}" not found or private.`);
@@ -112,18 +112,33 @@ export async function handleRepoCommand(ctx: Context, input: string): Promise<vo
     }
     await updateProgress(ctx, state, 'analyzing');
 
-    // Analyze
-    info('repo', 'Analyzing', { owner, name });
-    const analysis = await getRepoAnalyzer().analyzeRepo(owner, name);
+    // Run analysis using skill
+    info('repo', 'Analyzing via skill', { owner, name });
+    const skillResult = await repoSkill.run({
+      owner,
+      name,
+      forceRefresh: true, // Always fresh analysis for command
+    }, {
+      // Minimal context - skill uses global clients internally
+      github: getGitHub(),
+      anthropic: {} as never,
+      gemini: {} as never,
+      kv: {} as never,
+      telegram: {} as never,
+      sessions: {} as never,
+    });
+
+    if (!skillResult.success) {
+      throw new Error(skillResult.error || 'Analysis failed');
+    }
+
+    const { analysis, trackedRepo: tracked, cardMessage } = skillResult.data!;
     info('repo', 'Analysis complete', { owner, name, verdict: analysis.verdict });
     await updateProgress(ctx, state, 'formatting');
 
-    // Save
-    const tracked = await saveTrackedRepo(owner, name, analysis, repoInfo.pushed_at);
-
     // Delete progress, send card
     await ctx.api.deleteMessage(state.chatId, state.messageId);
-    const msg = await ctx.reply(formatCard(tracked), {
+    const msg = await ctx.reply(cardMessage, {
       parse_mode: 'Markdown',
       reply_markup: repoKeyboard(tracked),
     });
@@ -208,32 +223,6 @@ async function resolveRepo(input: string): Promise<{ owner: string; name: string
     throw new Error(`"${input}" not found. Use owner/name for external repos.`);
   }
   return { owner: found.full_name.split('/')[0], name: found.name };
-}
-
-async function saveTrackedRepo(
-  owner: string,
-  name: string,
-  analysis: TrackedRepo['analysis'],
-  pushedAt: string | null
-): Promise<TrackedRepo> {
-  const tracked: TrackedRepo = {
-    id: `${owner}/${name}`,
-    name,
-    owner,
-    state: verdictToState(analysis!.verdict),
-    analysis,
-    analyzed_at: new Date().toISOString(),
-    pending_action: null,
-    pending_since: null,
-    last_message_id: null,
-    last_push_at: pushedAt,
-    killed_at: null,
-    shipped_at: null,
-    cover_image_url: null,
-    homepage: null,
-  };
-  await stateManager.saveTrackedRepo(tracked);
-  return tracked;
 }
 
 function repoKeyboard(repo: TrackedRepo): InlineKeyboard {

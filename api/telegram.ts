@@ -45,12 +45,8 @@ import {
   generateLaunchPost, formatLaunchPostMessage,
   generateDeepDive, formatDeepDiveMessage,
 } from '../lib/ai/index.js';
-import {
-  analyzeChart,
-  annotateChart,
-  formatChartCaption,
-  formatChartError,
-} from '../lib/chart/index.js';
+import { chartSkill, formatChartError } from '../lib/skills/chart/index.js';
+import { createSkillContext } from '../lib/skills/_shared/context.js';
 
 // ============ SETUP ============
 
@@ -997,13 +993,13 @@ bot.on('message:photo', async (ctx) => {
   info('photo', 'Received chart image', { from: ctx.from?.id });
 
   const chatIdNum = ctx.chat!.id;
-  
+
   const progressMsg = await ctx.reply('📥 Downloading chart...', { parse_mode: 'Markdown' });
 
   try {
     const photos = ctx.message.photo;
     const largestPhoto = photos[photos.length - 1];
-    
+
     const file = await ctx.api.getFile(largestPhoto.file_id);
     const filePath = file.file_path;
     if (!filePath) {
@@ -1019,40 +1015,37 @@ bot.on('message:photo', async (ctx) => {
     }
 
     const arrayBuffer = await response.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString('base64');
+    const imageBase64 = Buffer.from(arrayBuffer).toString('base64');
 
-    info('photo', 'Image downloaded', { size: `${(base64.length / 1024).toFixed(1)}KB` });
+    info('photo', 'Image downloaded', { size: `${(imageBase64.length / 1024).toFixed(1)}KB` });
 
-    await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, '📊 Extracting levels...');
+    // Create skill context with progress callback
+    const skillCtx = createSkillContext(ctx, {
+      onProgress: async (step, detail) => {
+        const emoji = step.includes('Extracting') ? '📊' : '🎨';
+        const msg = detail ? `${emoji} ${step} (${detail})` : `${emoji} ${step}`;
+        await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, msg);
+      },
+    });
 
-    const analysis = await analyzeChart(base64);
+    // Run chart skill
+    const result = await chartSkill.run({ imageBase64 }, skillCtx);
 
-    if (!analysis.success) {
-      await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatChartError(analysis.error || 'Analysis failed'));
+    if (!result.success) {
+      await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatChartError(result.error || 'Analysis failed'));
       return;
     }
 
-    if (analysis.keyZones.length === 0) {
-      await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatChartError('No zones detected'));
-      return;
-    }
+    const { analysis, annotatedImage, caption } = result.data!;
 
-    await ctx.api.editMessageText(
-      chatIdNum, 
-      progressMsg.message_id, 
-      `🎨 Drawing ${analysis.keyZones.length} zone${analysis.keyZones.length !== 1 ? 's' : ''}...`
-    );
-
-    const annotatedBase64 = await annotateChart(base64, analysis);
-
-    if (!annotatedBase64) {
+    if (!annotatedImage) {
       await ctx.api.editMessageText(chatIdNum, progressMsg.message_id, formatChartError('Annotation failed'));
       return;
     }
 
-    const imageBuffer = Buffer.from(annotatedBase64, 'base64');
+    const imageBuffer = Buffer.from(annotatedImage, 'base64');
     await ctx.replyWithPhoto(new InputFile(imageBuffer, 'chart-annotated.png'), {
-      caption: formatChartCaption(analysis),
+      caption,
       parse_mode: 'Markdown',
     });
 
@@ -1062,10 +1055,10 @@ bot.on('message:photo', async (ctx) => {
       // Message may already be deleted
     }
 
-    info('photo', 'Annotation complete', { 
-      symbol: analysis.symbol, 
+    info('photo', 'Annotation complete', {
+      symbol: analysis.symbol,
       regime: analysis.regime.type,
-      zones: analysis.keyZones.length 
+      zones: analysis.keyZones.length
     });
 
   } catch (err) {

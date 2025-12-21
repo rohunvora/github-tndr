@@ -8,7 +8,7 @@ import { InlineKeyboard } from 'grammy';
 import { info, error as logErr } from '../../core/logger.js';
 import { stateManager } from '../../core/state.js';
 import { GitHubClient } from '../../core/github.js';
-import { generateReadme } from './generator.js';
+import { readmeSkill } from '../../skills/readme/index.js';
 import { acquireLock, releaseLock } from '../../core/update-guard.js';
 
 // Store pending READMEs
@@ -38,42 +38,32 @@ export async function handleReadmeCommand(ctx: Context, input: string): Promise<
 
   // Show progress
   const progressMsg = await ctx.reply('📝 Generating README...');
-  
+
   try {
     // Resolve repo
     const { owner, name } = await resolveRepo(input);
 
-    // Get tracked repo
-    const tracked = await stateManager.getTrackedRepo(owner, name);
-    if (!tracked?.analysis) {
-      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, 
-        `❌ Repo "${owner}/${name}" not analyzed. Run \`/repo ${input}\` first.`);
-      return;
-    }
-
-    const github = new GitHubClient(process.env.GITHUB_TOKEN!);
-
-    // Fetch context
-    const [repoInfo, existingReadme, packageJson, fileTree] = await Promise.all([
-      github.getRepoInfo(owner, name),
-      github.getFileContent(owner, name, 'README.md'),
-      github.getFileContent(owner, name, 'package.json'),
-      github.getRepoTree(owner, name, 50),
-    ]);
-
-    if (!repoInfo) {
-      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, '❌ Could not fetch repo info');
-      return;
-    }
-
-    // Generate README
-    const readme = await generateReadme({
-      repo: { name, description: repoInfo.description },
-      analysis: tracked.analysis,
-      existingReadme,
-      packageJson,
-      fileTree,
+    // Generate README via skill
+    const result = await readmeSkill.run({ owner, name }, {
+      github: new GitHubClient(process.env.GITHUB_TOKEN!),
+      anthropic: {} as never,
+      gemini: {} as never,
+      kv: {} as never,
+      telegram: {} as never,
+      sessions: {} as never,
+      onProgress: async (step) => {
+        try {
+          await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, `📝 ${step}`);
+        } catch { /* rate limit */ }
+      },
     });
+
+    if (!result.success) {
+      await ctx.api.editMessageText(ctx.chat!.id, progressMsg.message_id, `❌ ${result.error}`);
+      return;
+    }
+
+    const { content, preview } = result.data!;
 
     // Delete progress
     try {
@@ -82,12 +72,7 @@ export async function handleReadmeCommand(ctx: Context, input: string): Promise<
 
     // Store pending README
     const sessionId = `readme_${Date.now()}`;
-    pendingReadmes.set(sessionId, { owner, name, content: readme });
-
-    // Send preview (truncated)
-    const preview = readme.length > 500 
-      ? readme.substring(0, 500) + '\n\n..._truncated_'
-      : readme;
+    pendingReadmes.set(sessionId, { owner, name, content });
 
     await ctx.reply(`📝 **${name}** README preview:\n\n\`\`\`markdown\n${preview}\n\`\`\``, {
       parse_mode: 'Markdown',
