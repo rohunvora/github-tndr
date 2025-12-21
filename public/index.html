@@ -414,7 +414,7 @@
 <body>
   <div class="container">
     <div class="header">
-      <h1>Ship or Kill</h1>
+      <h1>Project Status</h1>
       <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
         <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="5"/>
@@ -423,13 +423,13 @@
         <span class="theme-label">Light</span>
       </button>
     </div>
-    <p class="subtitle">28 projects analyzed. Here's what to do with each one.</p>
-    
+    <p class="subtitle">What's active, what's done, what's paused.</p>
+
     <div class="stats">
-      <strong>Summary:</strong> 
-      <span id="ship-count">0</span> ship, 
-      <span id="cut-count">0</span> cut, 
-      <span id="kill-count">0</span> kill
+      <strong>Summary:</strong>
+      <span id="ship-count">0</span> active,
+      <span id="cut-count">0</span> done,
+      <span id="kill-count">0</span> paused
     </div>
 
     <!-- Ship Section -->
@@ -444,8 +444,8 @@
           <rect x="10" y="10" width="2" height="1" class="face-feature"/>
         </svg>
         <div class="section-title">
-          <h2>Doing Great!</h2>
-          <div class="section-subtitle">✓ Ready to ship</div>
+          <h2>Active</h2>
+          <div class="section-subtitle">Currently working on these</div>
         </div>
         <span class="section-count" id="ship-badge">0</span>
       </div>
@@ -473,8 +473,8 @@
           <rect x="5" y="10" width="6" height="1" class="face-feature"/>
         </svg>
         <div class="section-title">
-          <h2>Doing OK</h2>
-          <div class="section-subtitle">○ Cut to core feature</div>
+          <h2>Done</h2>
+          <div class="section-subtitle">Shipped and complete</div>
         </div>
         <span class="section-count" id="cut-badge">0</span>
       </div>
@@ -504,13 +504,13 @@
           <rect x="10" y="10" width="2" height="1" class="face-feature"/>
         </svg>
         <div class="section-title">
-          <h2>Pay Attention!</h2>
-          <div class="section-subtitle">✗ Kill or archive these</div>
+          <h2>Paused</h2>
+          <div class="section-subtitle">On hold for now</div>
         </div>
         <span class="section-count" id="kill-badge">0</span>
       </div>
       <button class="section-toggle" onclick="toggleSection('section-kill')">
-        Show <span id="kill-toggle-count">0</span> archived projects ↓
+        Show <span id="kill-toggle-count">0</span> paused projects ↓
       </button>
       <div class="section-content">
         <table id="table-kill">
@@ -583,25 +583,30 @@
     
     // Project data and rendering
     const projects = [
-      { name: "my-cmc", desc: "Real-time leaderboard tracking crypto protocols that actually buy back their tokens.", verdict: "Ship it - 7 stars, unique angle", live: "https://my-cmc.vercel.app", stars: 7, status: "ship" },
-      { name: "taste-library", desc: "Turn your visual taste into AI-readable rules. 26 components extracted.", verdict: "Ship it - unique value prop, working demo", status: "ship" },
-      { name: "github-tndr", desc: "AI Telegram bot that analyzes your GitHub repos - ship, focus, or kill.", verdict: "Ship it - this is meta and useful", live: "https://github-tndr.vercel.app", status: "ship" },
-      { name: "chart-ai", desc: "Chart analysis that's actually verifiable. AI-annotated support/resistance.", verdict: "Ship it - working product, clear value", live: "https://chart-ai.vercel.app", status: "ship" },
-      { name: "tweet-price-charts", desc: "Do founder tweets move token prices? Multi-asset analytics.", verdict: "Cut - focus on ONE compelling correlation", live: "https://tweet-price-charts.vercel.app", status: "cut" },
-      { name: "cursor-maxxing", desc: "Your chat history writes your rules. Extract Cursor patterns.", verdict: "Optimizations for vibecoders", live: "https://cursor-maxxing.vercel.app", status: "cut" },
-      { name: "cursortimer", desc: "Live ETA timer for long-running Cursor AI agent runs.", verdict: "Needs polish and distribution", status: "cut" },
-      { name: "spaces-chat", desc: "Real-time chat overlay for Twitter Spaces with OBS integration.", verdict: "Niche but useful - needs live demo", status: "cut" },
-      { name: "kabuto-cards-dashboard", desc: "Pokemon TCG market depth analysis using TCGPlayer API.", verdict: "Cool niche - needs more features", live: "https://kabuto-cards-dashboard.vercel.app", status: "cut" },
-      { name: "chart-predictoor", desc: "Real-time BTC prediction game where rank changes as price moves.", verdict: "Fun - could go viral with right launch", live: "https://chart-pred.vercel.app", status: "cut" },
-      { name: "agent-course", desc: "Learn to build AI agents from scratch through hands-on lessons.", verdict: "Finish lessons or archive", status: "cut" },
-      { name: "habit-snapper", desc: "Photo-proof habit tracking with AI meal analysis.", verdict: "Focus on ONE habit type", live: "https://habit-snapper.vercel.app", status: "cut" },
-      { name: "course-ai", desc: "AI course generator with gamified Duolingo-style learning.", verdict: "Over-engineered - simplify", live: "https://course-ai.vercel.app", stars: 1, status: "cut" },
-      { name: "whop-app-ideas", desc: "Auto-generates completion certificates for Whop courses.", verdict: "B2B potential - needs partnership", live: "https://whop-app-ideas.vercel.app", status: "cut" },
-      { name: "anti-slop-library", desc: "Detect AI-generated 'slop' aesthetic in web projects.", verdict: "Novelty or real utility?", live: "https://anti-slop-library.vercel.app", status: "cut" },
-      { name: "ai-arbitrage", desc: "Turn AI model updates into business opportunities.", verdict: "Needs fresh data pipeline", live: "https://ai-arbitrage.vercel.app", status: "cut" },
-      { name: "why-pump", desc: "Real-time catalyst detection for Solana token pumps/dumps.", verdict: "Abandoned - archive for reference", status: "kill" },
-      { name: "unfollow-bot", desc: "Bulk unfollow accounts on X.", verdict: "Private - could get very popular", status: "kill" },
-      { name: "rohunvora", desc: "GitHub profile README", verdict: "Profile repo - not a project", status: "kill" }
+      // ACTIVE - currently working on
+      { name: "github-tndr", desc: "AI Telegram bot — hub for all life automations & personal OS.", verdict: "The brain. Everything feeds here.", live: "https://github-tndr.vercel.app", status: "ship" },
+      { name: "cursor-maxxing", desc: "Extract Cursor chat patterns into .cursorrules.", verdict: "Optimizations for vibecoders", live: "https://cursor-maxxing.vercel.app", status: "ship" },
+      { name: "chart-ai", desc: "Chart analysis that's actually verifiable.", verdict: "Integrated as tool for the hub", live: "https://chart-ai.vercel.app", status: "ship" },
+      { name: "taste-library", desc: "Turn your visual taste into AI-readable rules.", verdict: "My taste is edge", status: "ship" },
+      { name: "tweet-price-charts", desc: "Do founder tweets move token prices?", verdict: "Not shipped yet - need story to tweet", live: "https://tweet-price-charts.vercel.app", status: "ship" },
+      { name: "unfollow-bot", desc: "Bulk unfollow accounts on X.", verdict: "High potential - needs resurrection", status: "ship" },
+
+      // DONE - shipped and complete
+      { name: "my-cmc", desc: "Real-time leaderboard of crypto protocols with real buybacks.", verdict: "Shipped. Frank DeGods shared it.", live: "https://my-cmc.vercel.app", stars: 7, status: "cut" },
+      { name: "kabuto-cards-dashboard", desc: "Pokemon TCG market depth analysis.", verdict: "One-time query, shipped to friends.", live: "https://kabuto-cards-dashboard.vercel.app", status: "cut" },
+
+      // PAUSED - on hold
+      { name: "cursortimer", desc: "Live ETA timer for long-running Cursor AI agent runs.", verdict: "Needs polish", status: "kill" },
+      { name: "spaces-chat", desc: "Real-time chat overlay for Twitter Spaces with OBS.", verdict: "Niche but useful", status: "kill" },
+      { name: "chart-predictoor", desc: "Real-time BTC prediction game.", verdict: "Fun - could go viral", live: "https://chart-pred.vercel.app", status: "kill" },
+      { name: "agent-course", desc: "Learn to build AI agents from scratch.", verdict: "Finish lessons someday", status: "kill" },
+      { name: "habit-snapper", desc: "Photo-proof habit tracking with AI meal analysis.", verdict: "Concepts could apply to hub", live: "https://habit-snapper.vercel.app", status: "kill" },
+      { name: "course-ai", desc: "AI course generator with gamification.", verdict: "Over-engineered", live: "https://course-ai.vercel.app", stars: 1, status: "kill" },
+      { name: "whop-app-ideas", desc: "Auto-generate certificates for Whop courses.", verdict: "Random free time idea", live: "https://whop-app-ideas.vercel.app", status: "kill" },
+      { name: "anti-slop-library", desc: "Detect AI 'slop' aesthetic in web projects.", verdict: "Novelty project", live: "https://anti-slop-library.vercel.app", status: "kill" },
+      { name: "ai-arbitrage", desc: "Turn AI model updates into business opportunities.", verdict: "Needs fresh data", live: "https://ai-arbitrage.vercel.app", status: "kill" },
+      { name: "why-pump", desc: "Real-time catalyst detection for Solana tokens.", verdict: "Archived", status: "kill" },
+      { name: "rohunvora", desc: "GitHub profile README.", verdict: "Not a project", status: "kill" }
     ];
 
     function toggleSection(id) {
