@@ -306,6 +306,21 @@
       font-size: var(--text-sm);
     }
 
+    /* Activity dot - green pulse for recently active */
+    .activity-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: var(--green-text);
+      border-radius: 50%;
+      margin-left: var(--space-2);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
     /* Collapsible */
     .section-toggle {
       display: none;
@@ -581,6 +596,50 @@
     // Initialize theme
     setTheme(getStoredTheme());
     
+    // GitHub enrichment
+    const GITHUB_USER = 'rohunvora';
+    const CACHE_KEY = 'github_repos_cache';
+    const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+    async function enrichWithGitHub() {
+      // Check cache first
+      const cached = localStorage.getItem(CACHE_KEY);
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached);
+        if (Date.now() - timestamp < CACHE_TTL) {
+          applyGitHubData(data);
+          return;
+        }
+      }
+
+      try {
+        const response = await fetch(`https://api.github.com/users/${GITHUB_USER}/repos?per_page=100`);
+        if (!response.ok) throw new Error('Rate limited');
+        const repos = await response.json();
+
+        // Cache the response
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ data: repos, timestamp: Date.now() }));
+        applyGitHubData(repos);
+      } catch (e) {
+        console.log('GitHub API unavailable, using cached/static data');
+      }
+    }
+
+    function applyGitHubData(repos) {
+      const repoMap = Object.fromEntries(repos.map(r => [r.name, r]));
+      const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+
+      projects.forEach(p => {
+        const gh = repoMap[p.name];
+        if (gh) {
+          p.stars = gh.stargazers_count || 0;
+          p.recentlyActive = gh.pushed_at && new Date(gh.pushed_at).getTime() > sevenDaysAgo;
+        }
+      });
+
+      render(); // Re-render with live data
+    }
+
     // Project data and rendering
     const projects = [
       // ACTIVE - currently working on
@@ -628,11 +687,14 @@
 
       function fillTable(id, list) {
         const tbody = document.querySelector(`#${id} tbody`);
+        tbody.innerHTML = ''; // Clear for re-render
         list.forEach(p => {
           const tr = document.createElement('tr');
+          const starsHtml = p.stars ? `<span class="project-stars">★${p.stars}</span>` : '';
+          const activityDot = p.recentlyActive ? '<span class="activity-dot" title="Active in last 7 days"></span>' : '';
           tr.innerHTML = `
             <td>
-              <span class="project-name">${p.name}</span>${p.stars ? `<span class="project-stars">★${p.stars}</span>` : ''}
+              <span class="project-name">${p.name}</span>${starsHtml}${activityDot}
               <div class="verdict">${p.verdict}</div>
             </td>
             <td class="desc">${p.desc}</td>
@@ -648,6 +710,7 @@
     }
 
     render();
+    enrichWithGitHub(); // Fetch live GitHub data (stars, activity)
   </script>
 </body>
 </html>
