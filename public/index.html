@@ -306,19 +306,38 @@
       font-size: var(--text-sm);
     }
 
-    /* Activity dot - green pulse for recently active */
-    .activity-dot {
-      display: inline-block;
-      width: 8px;
-      height: 8px;
-      background: var(--green-text);
-      border-radius: 50%;
-      margin-left: var(--space-2);
-      animation: pulse 2s ease-in-out infinite;
+    /* Sortable column header */
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
     }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
+    th.sortable:hover {
+      color: var(--text-secondary);
+    }
+    th.sortable::after {
+      content: ' ↕';
+      opacity: 0.3;
+    }
+    th.sortable.asc::after {
+      content: ' ↑';
+      opacity: 1;
+    }
+    th.sortable.desc::after {
+      content: ' ↓';
+      opacity: 1;
+    }
+
+    /* Last commit column */
+    .last-commit {
+      font-size: var(--text-sm);
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .last-commit.recent {
+      color: var(--green-text);
+    }
+    .last-commit.stale {
+      color: var(--text-faint);
     }
 
     /* Collapsible */
@@ -470,6 +489,7 @@
             <tr>
               <th>Project</th>
               <th>Description</th>
+              <th class="sortable" onclick="sortTable('ship', 'pushed_at')">Last Commit</th>
               <th>Link</th>
             </tr>
           </thead>
@@ -499,6 +519,7 @@
             <tr>
               <th>Project</th>
               <th>Description</th>
+              <th class="sortable" onclick="sortTable('cut', 'pushed_at')">Last Commit</th>
               <th>Link</th>
             </tr>
           </thead>
@@ -533,6 +554,7 @@
             <tr>
               <th>Project</th>
               <th>Description</th>
+              <th class="sortable" onclick="sortTable('kill', 'pushed_at')">Last Commit</th>
               <th>Link</th>
             </tr>
           </thead>
@@ -627,17 +649,61 @@
 
     function applyGitHubData(repos) {
       const repoMap = Object.fromEntries(repos.map(r => [r.name, r]));
-      const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
 
       projects.forEach(p => {
         const gh = repoMap[p.name];
         if (gh) {
           p.stars = gh.stargazers_count || 0;
-          p.recentlyActive = gh.pushed_at && new Date(gh.pushed_at).getTime() > sevenDaysAgo;
+          p.pushed_at = gh.pushed_at ? new Date(gh.pushed_at).getTime() : null;
         }
       });
 
       render(); // Re-render with live data
+    }
+
+    // Relative time formatter
+    function timeAgo(timestamp) {
+      if (!timestamp) return '—';
+      const seconds = Math.floor((Date.now() - timestamp) / 1000);
+      const intervals = [
+        { label: 'y', seconds: 31536000 },
+        { label: 'mo', seconds: 2592000 },
+        { label: 'w', seconds: 604800 },
+        { label: 'd', seconds: 86400 },
+        { label: 'h', seconds: 3600 },
+        { label: 'm', seconds: 60 },
+      ];
+      for (const { label, seconds: s } of intervals) {
+        const count = Math.floor(seconds / s);
+        if (count >= 1) return `${count}${label} ago`;
+      }
+      return 'just now';
+    }
+
+    // Sort state per table
+    const sortState = { ship: null, cut: null, kill: null };
+
+    function sortTable(category, field) {
+      const statusMap = { ship: 'ship', cut: 'cut', kill: 'kill' };
+      const list = projects.filter(p => p.status === statusMap[category]);
+
+      // Toggle sort direction
+      if (sortState[category] === 'desc') {
+        sortState[category] = 'asc';
+        list.sort((a, b) => (a[field] || 0) - (b[field] || 0));
+      } else {
+        sortState[category] = 'desc';
+        list.sort((a, b) => (b[field] || 0) - (a[field] || 0));
+      }
+
+      // Update header classes
+      document.querySelectorAll(`#table-${category} th.sortable`).forEach(th => {
+        th.classList.remove('asc', 'desc');
+        if (sortState[category]) th.classList.add(sortState[category]);
+      });
+
+      // Re-render just this table
+      fillTable(`table-${category}`, list);
     }
 
     // Project data and rendering
@@ -688,16 +754,25 @@
       function fillTable(id, list) {
         const tbody = document.querySelector(`#${id} tbody`);
         tbody.innerHTML = ''; // Clear for re-render
+        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+
         list.forEach(p => {
           const tr = document.createElement('tr');
           const starsHtml = p.stars ? `<span class="project-stars">★${p.stars}</span>` : '';
-          const activityDot = p.recentlyActive ? '<span class="activity-dot" title="Active in last 7 days"></span>' : '';
+
+          // Color code: green if <7d, muted if >30d
+          let commitClass = 'last-commit';
+          if (p.pushed_at && p.pushed_at > sevenDaysAgo) commitClass += ' recent';
+          else if (!p.pushed_at || p.pushed_at < thirtyDaysAgo) commitClass += ' stale';
+
           tr.innerHTML = `
             <td>
-              <span class="project-name">${p.name}</span>${starsHtml}${activityDot}
+              <span class="project-name">${p.name}</span>${starsHtml}
               <div class="verdict">${p.verdict}</div>
             </td>
             <td class="desc">${p.desc}</td>
+            <td class="${commitClass}">${timeAgo(p.pushed_at)}</td>
             <td>${p.live ? `<a href="${p.live}" target="_blank" class="btn-live">Live →</a>` : '<span class="no-link">—</span>'}</td>
           `;
           tbody.appendChild(tr);
