@@ -1,172 +1,191 @@
-<div align="center">
-  <img src="/.github/social-preview.png" alt="github-tndr" width="800" />
-  <p><strong>AI-powered Telegram bot that analyzes your GitHub repos and tells you whether to ship, focus, or kill each project</strong></p>
-  <p>
-    <a href="https://github-tndr.vercel.app"><strong>🚀 Live Demo</strong></a>
-    ·
-    <a href="LICENSE">MIT License</a>
-  </p>
-</div>
+# Telegram AI Bot Framework
 
-# Ship or Kill Bot 🚀☠️
-
-**AI-powered Telegram bot that analyzes your GitHub repos and tells you whether to ship, focus, or kill each project.**
-
-Stop letting half-finished projects rot in your GitHub. This bot scans your repositories, identifies what's actually valuable, and gives you brutally honest recommendations: ship it as-is, cut to the core feature, or kill it entirely.
-
-## Commands
-
-### 📊 Analysis
-| Command | Description |
-|---------|-------------|
-| `/repo <name>` | Analyze a GitHub repo (ship/cut/kill verdict) |
-| `/scan` | Batch analyze all repos from last N days |
-| **Send photo** | Analyze chart image for support/resistance zones |
-
-### 🎨 Generation
-| Command | Description |
-|---------|-------------|
-| `/preview <repo>` | Generate cover image → approve → add to README |
-| `/readme <repo>` | Generate/optimize README |
-
-### 🎴 Feed
-| Command | Description |
-|---------|-------------|
-| `/next` | Carousel of active projects — pick what to work on |
-| `/status` | See repo counts by state |
-
-## How It Works
-
-```
-You: /scan
-
-Bot: 🔍 Scanning...
-     ████████░░ 80%
-     📂 crypto-dashboard
-     🟢2 🟡3 🔴1 ☠️1
-
-Bot: ✅ Scan Complete (8 repos)
-     
-     🟢 Ready to Ship (2)
-       • github-tndr
-       • bel-rtr
-     
-     🟡 Cut to Core (3)
-       • crypto-dashboard
-       • habit-tracker
-       • note-app
-
-You: /repo crypto-dashboard
-
-Bot: ━━━ crypto-dashboard ━━━
-     🟡 CUT TO CORE
-     
-     Real-time portfolio tracker with clean charts
-     
-     ⚠️ README ≠ code: Claims "social features" but...
-     
-     → Delete: NewsFeed.tsx, SocialStream.tsx (+3)
-     
-     Pride: 🟡 comfortable (2 blockers)
-     
-     [✂️ Cut] [☠️ Kill] [📋 More]
-```
+Modular Telegram bot with pluggable tools, multi-provider AI (Claude + Gemini), and a testable skills layer.
 
 ## Architecture
 
 ```
-lib/
-├── core/                    # Shared infrastructure
-│   ├── config.ts            # AI providers (Anthropic, Google)
-│   ├── github.ts            # GitHub API client
-│   ├── state.ts             # Vercel KV state manager
-│   ├── types.ts             # Shared types & Zod schemas
-│   └── logger.ts            # Structured logging
-│
-├── tools/                   # Self-contained business logic
-│   ├── chart/               # Chart photo analysis (Gemini Vision)
-│   ├── repo/                # Repository analyzer (Claude)
-│   ├── scan/                # Batch repo scanning
-│   ├── preview/             # Cover image generation (Gemini)
-│   ├── readme/              # README generation (Claude)
-│   └── next/                # Project prioritization
-│
-├── skills/                  # Testable wrappers around tools
-│   ├── _shared/             # Common skill infrastructure
-│   ├── chart/               # chartSkill
-│   ├── repo/                # repoSkill
-│   ├── scan/                # scanSkill
-│   ├── preview/             # previewSkill
-│   ├── readme/              # readmeSkill
-│   └── next/                # nextSkill
-│
-├── ai/                      # AI function modules
-│   ├── repo-potential.ts    # Generate potential positioning
-│   ├── next-step.ts         # Determine next action
-│   ├── cursor-prompt.ts     # Generate Cursor prompts
-│   └── ...
-│
-├── bot/                     # Telegram bot infrastructure
-│   ├── format.ts            # Message formatting
-│   ├── keyboards.ts         # Inline keyboards
-│   └── handlers/            # Command & callback handlers
-│
-└── links/                   # URL detection & handling
-    └── handlers/            # GitHub, chart, etc.
-
-api/                         # Vercel Edge Functions
-├── telegram.ts              # Main bot webhook
-├── github-webhook.ts        # Push notifications
-└── health.ts                # Status endpoint
+Telegram API
+     │
+     ▼
+Tool Registry ─────────────────────────────────
+  │ repo │ scan │ preview │ readme │ next │ ...
+  └──────┴──────┴─────────┴────────┴──────┘
+     │
+     ▼
+Skills Layer
+  • Dependency injection (GitHub, AI, KV, Telegram)
+  • Progress tracking
+  • Session management
+  • Testable without mocking Telegram
+     │
+     ▼
+AI Providers
+  ┌─────────────┐  ┌─────────────┐
+  │  Anthropic  │  │   Google    │
+  │  (Claude)   │  │  (Gemini)   │
+  └─────────────┘  └─────────────┘
 ```
 
-### Design Principles
+**Key ideas:**
+- Tools handle commands/messages/callbacks — no business logic in bot handlers
+- Skills wrap tools with dependency injection — testable without Telegram
+- Multi-provider AI — Claude for reasoning, Gemini for vision/images
 
-1. **Tools are pure logic** — Each tool in `lib/tools/` does one thing well with no Telegram dependencies
-2. **Skills wrap tools** — `lib/skills/` adds progress tracking, error handling, and testability
-3. **Dependency injection** — Skills receive clients/configs, tools use singletons
-4. **Type safety** — Zod schemas validate all AI responses
+## Quick Start
 
-## Setup
+```bash
+git clone https://github.com/yourusername/telegram-ai-bot
+cd telegram-ai-bot
+npm install
 
-1. **Clone and install**
-   ```bash
-   git clone https://github.com/yourusername/github-tndr
-   cd github-tndr
-   npm install
-   ```
+cp .env.example .env.local
+# Add API keys
 
-2. **Environment variables**
-   ```bash
-   cp .env.example .env.local
-   ```
-   Fill in:
-   - `TELEGRAM_BOT_TOKEN` - Get from [@BotFather](https://t.me/botfather)
-   - `ANTHROPIC_API_KEY` - Get from [Anthropic Console](https://console.anthropic.com)
-   - `GOOGLE_AI_KEY` - Get from [Google AI Studio](https://makersuite.google.com/app/apikey)
-   - `GITHUB_TOKEN` - Personal access token with repo read permissions
-   - `KV_*` - Vercel KV database credentials
+vercel deploy
 
-3. **Deploy**
-   ```bash
-   vercel deploy
-   ```
+curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://your-app.vercel.app/api/telegram"}'
+```
 
-4. **Set webhook**
-   ```bash
-   curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook" \
-        -H "Content-Type: application/json" \
-        -d '{"url": "https://your-app.vercel.app/api/telegram"}'
-   ```
+## Creating a Tool
+
+Tools are self-contained. Each declares what it handles.
+
+```typescript
+// lib/tools/hello/index.ts
+import type { Tool } from '../types.js';
+
+export const helloTool: Tool = {
+  name: 'hello',
+  version: '1.0.0',
+  description: 'Greeting tool',
+
+  commands: [
+    {
+      name: 'hello',
+      description: 'Say hello',
+      handler: async (ctx, args) => {
+        await ctx.reply(`Hello, ${args || 'World'}!`);
+      },
+    },
+  ],
+
+  // Handle photos
+  messageHandlers: [
+    {
+      type: 'photo',
+      priority: 10,
+      handler: async (ctx) => {
+        await ctx.reply('Got your photo');
+      },
+    },
+  ],
+
+  // Handle button callbacks
+  callbackHandlers: [
+    {
+      pattern: 'hello:',
+      handler: async (ctx, data) => {
+        await ctx.answerCallbackQuery({ text: data });
+      },
+    },
+  ],
+};
+```
+
+Register in `lib/tools/index.ts`. The registry routes automatically.
+
+## Creating a Skill
+
+Skills add testability via dependency injection.
+
+```typescript
+// lib/skills/hello/index.ts
+import type { Skill, SkillContext, SkillResult } from '../_shared/types.js';
+
+interface HelloInput { name: string }
+interface HelloOutput { greeting: string }
+
+export const helloSkill: Skill<HelloInput, HelloOutput> = {
+  name: 'hello',
+  description: 'Generate greeting with AI',
+  dependencies: ['anthropic'],
+
+  async run(input, ctx): Promise<SkillResult<HelloOutput>> {
+    const response = await ctx.anthropic.messages.create({
+      model: 'claude-3-5-haiku-20241022',
+      messages: [{ role: 'user', content: `Greet ${input.name}` }],
+    });
+
+    return {
+      success: true,
+      data: { greeting: response.content[0].text },
+    };
+  },
+};
+```
+
+Test without real API calls:
+
+```typescript
+const ctx = createTestContext(); // Mocks injected
+const result = await helloSkill.run({ name: 'Test' }, ctx);
+```
+
+## Project Structure
+
+```
+lib/
+├── core/           # Config, GitHub client, KV state, types
+├── tools/          # Command handlers (one dir per tool)
+│   ├── types.ts    # Tool interface
+│   ├── registry.ts # Auto-routing
+│   └── repo/       # Example: GitHub repo analyzer
+├── skills/         # Testable wrappers (one dir per skill)
+│   ├── _shared/    # Skill interface, context, progress
+│   └── repo/       # Example: repo analysis skill
+├── ai/             # Single-purpose AI functions
+└── bot/            # Telegram formatting, keyboards
+
+api/
+├── telegram.ts     # Main webhook
+└── health.ts       # Status endpoint
+```
+
+## Built-in Tools
+
+Examples demonstrating different patterns:
+
+| Command | Pattern | What it does |
+|---------|---------|--------------|
+| `/repo <name>` | Command + cache | Analyze GitHub repo with Claude |
+| `/scan` | Batch + progress | Scan multiple repos |
+| `/preview <repo>` | Generation + session | Generate cover image with Gemini |
+| `/readme <repo>` | Generation | Generate README with Claude |
+| `/next` | Carousel | Interactive project picker |
+| Photo | Message handler | Chart analysis with Gemini Vision |
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Yes | From @BotFather |
+| `ANTHROPIC_API_KEY` | Yes | Claude API |
+| `GOOGLE_AI_KEY` | No | Gemini (vision/image gen) |
+| `GITHUB_TOKEN` | No | GitHub API |
+| `KV_REST_API_*` | No | Vercel KV |
 
 ## Tech Stack
 
-- **Runtime**: Node.js + TypeScript
-- **Bot Framework**: Grammy (Telegram Bot API)
-- **AI**: Anthropic Claude (analysis) + Google Gemini (vision, image gen)
-- **Database**: Vercel KV (Redis)
-- **Deployment**: Vercel Edge Functions
+- Node.js + TypeScript
+- Grammy (Telegram)
+- Anthropic Claude + Google Gemini
+- Vercel KV (Redis)
+- Vercel Edge Functions
+- Zod
 
 ## Contributing
 
-See [SETUP.md](SETUP.md) for detailed development setup instructions.
+See [SETUP.md](SETUP.md) for dev setup.

@@ -1,8 +1,8 @@
 {
-  "name": "ship-or-kill-bot",
+  "name": "telegram-ai-bot",
   "version": "2.0.0",
   "type": "module",
-  "description": "Telegram bot that analyzes your repos and helps you ship or kill them",
+  "description": "Telegram bot framework with pluggable tools, multi-provider AI, and testable skills layer",
   "scripts": {
     "dev": "vercel dev",
     "optimize-readmes": "npx tsx scripts/optimize-readmes.ts",
