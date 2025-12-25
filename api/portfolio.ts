@@ -166,6 +166,9 @@ function buildPortfolio(repos: GitHubRepo[]): PortfolioData {
 }
 
 export default async function handler(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const forceRefresh = url.searchParams.get('refresh') === 'true';
+
   const headers = {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
@@ -173,10 +176,12 @@ export default async function handler(req: Request): Promise<Response> {
   };
 
   try {
-    // Check cache first
-    const cached = await kv.get<PortfolioData>(CACHE_KEY);
-    if (cached) {
-      return new Response(JSON.stringify(cached), { headers });
+    // Check cache first (unless refresh requested)
+    if (!forceRefresh) {
+      const cached = await kv.get<PortfolioData>(CACHE_KEY);
+      if (cached) {
+        return new Response(JSON.stringify(cached), { headers });
+      }
     }
 
     // Fetch fresh data
