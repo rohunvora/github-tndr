@@ -70,7 +70,7 @@ interface PortfolioProject {
   repoUrl: string;
   liveUrl: string | null;
   stars: number;
-  lastUpdated: string;
+  pushed_at: number | null; // timestamp in ms for frontend sorting
   category: 'active' | 'done' | 'paused';
   notes: string;
 }
@@ -142,7 +142,7 @@ function buildPortfolio(repos: GitHubRepo[]): PortfolioData {
       repoUrl: repo.html_url,
       liveUrl: repo.homepage || null,
       stars: repo.stargazers_count,
-      lastUpdated: repo.pushed_at,
+      pushed_at: repo.pushed_at ? new Date(repo.pushed_at).getTime() : null,
       category,
       notes: priority.notes,
     });
