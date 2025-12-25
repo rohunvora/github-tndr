@@ -122,9 +122,6 @@ function buildPortfolio(repos: GitHubRepo[]): PortfolioData {
   const projects: PortfolioProject[] = [];
 
   for (const repo of repos) {
-    // Skip private repos
-    if (repo.private) continue;
-
     const priority = USER_PRIORITIES[repo.name];
 
     // Skip KILLED tier
