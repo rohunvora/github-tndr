@@ -250,6 +250,10 @@
       font-size: var(--text-base);
       font-weight: 500;
       color: var(--text);
+      text-decoration: none;
+    }
+    a.project-name:hover {
+      text-decoration: underline;
     }
     .project-stars {
       color: var(--text-faint);
@@ -617,49 +621,6 @@
     
     // Initialize theme
     setTheme(getStoredTheme());
-    
-    // GitHub enrichment
-    const GITHUB_USER = 'rohunvora';
-    const CACHE_KEY = 'github_repos_cache';
-    const CACHE_TTL = 60 * 60 * 1000; // 1 hour
-
-    async function enrichWithGitHub() {
-      // Check cache first
-      const cached = localStorage.getItem(CACHE_KEY);
-      if (cached) {
-        const { data, timestamp } = JSON.parse(cached);
-        if (Date.now() - timestamp < CACHE_TTL) {
-          applyGitHubData(data);
-          return;
-        }
-      }
-
-      try {
-        const response = await fetch(`https://api.github.com/users/${GITHUB_USER}/repos?per_page=100`);
-        if (!response.ok) throw new Error('Rate limited');
-        const repos = await response.json();
-
-        // Cache the response
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ data: repos, timestamp: Date.now() }));
-        applyGitHubData(repos);
-      } catch (e) {
-        console.log('GitHub API unavailable, using cached/static data');
-      }
-    }
-
-    function applyGitHubData(repos) {
-      const repoMap = Object.fromEntries(repos.map(r => [r.name, r]));
-
-      projects.forEach(p => {
-        const gh = repoMap[p.name];
-        if (gh) {
-          p.stars = gh.stargazers_count || 0;
-          p.pushed_at = gh.pushed_at ? new Date(gh.pushed_at).getTime() : null;
-        }
-      });
-
-      render(); // Re-render with live data
-    }
 
     // Relative time formatter
     function timeAgo(timestamp) {
@@ -680,12 +641,16 @@
       return 'just now';
     }
 
+    // Store loaded data for sorting
+    let portfolioData = null;
+
     // Sort state per table
     const sortState = { ship: null, cut: null, kill: null };
 
     function sortTable(category, field) {
-      const statusMap = { ship: 'ship', cut: 'cut', kill: 'kill' };
-      const list = projects.filter(p => p.status === statusMap[category]);
+      if (!portfolioData) return;
+      const categoryMap = { ship: 'active', cut: 'done', kill: 'paused' };
+      const list = portfolioData.projects.filter(p => p.category === categoryMap[category]);
 
       // Toggle sort direction
       if (sortState[category] === 'desc') {
@@ -706,86 +671,102 @@
       fillTable(`table-${category}`, list);
     }
 
-    // Project data and rendering
-    const projects = [
-      // ACTIVE - currently working on
-      { name: "github-tndr", desc: "AI Telegram bot — hub for all life automations & personal OS.", verdict: "The brain. Everything feeds here.", live: "https://github-tndr.vercel.app", status: "ship" },
-      { name: "cursor-maxxing", desc: "Extract Cursor chat patterns into .cursorrules.", verdict: "Optimizations for vibecoders", live: "https://cursor-maxxing.vercel.app", status: "ship" },
-      { name: "chart-ai", desc: "Chart analysis that's actually verifiable.", verdict: "Integrated as tool for the hub", live: "https://chart-ai.vercel.app", status: "ship" },
-      { name: "taste-library", desc: "Turn your visual taste into AI-readable rules.", verdict: "My taste is edge", status: "ship" },
-      { name: "tweet-price-charts", desc: "Do founder tweets move token prices?", verdict: "Not shipped yet - need story to tweet", live: "https://tweet-price-charts.vercel.app", status: "ship" },
-      { name: "unfollow-bot", desc: "Bulk unfollow accounts on X.", verdict: "High potential - needs resurrection", status: "ship" },
-
-      // DONE - shipped and complete
-      { name: "my-cmc", desc: "Real-time leaderboard of crypto protocols with real buybacks.", verdict: "Shipped. Frank DeGods shared it.", live: "https://my-cmc.vercel.app", stars: 7, status: "cut" },
-      { name: "kabuto-cards-dashboard", desc: "Pokemon TCG market depth analysis.", verdict: "One-time query, shipped to friends.", live: "https://kabuto-cards-dashboard.vercel.app", status: "cut" },
-
-      // PAUSED - on hold
-      { name: "cursortimer", desc: "Live ETA timer for long-running Cursor AI agent runs.", verdict: "Needs polish", status: "kill" },
-      { name: "spaces-chat", desc: "Real-time chat overlay for Twitter Spaces with OBS.", verdict: "Niche but useful", status: "kill" },
-      { name: "chart-predictoor", desc: "Real-time BTC prediction game.", verdict: "Fun - could go viral", live: "https://chart-pred.vercel.app", status: "kill" },
-      { name: "agent-course", desc: "Learn to build AI agents from scratch.", verdict: "Finish lessons someday", status: "kill" },
-      { name: "habit-snapper", desc: "Photo-proof habit tracking with AI meal analysis.", verdict: "Concepts could apply to hub", live: "https://habit-snapper.vercel.app", status: "kill" },
-      { name: "course-ai", desc: "AI course generator with gamification.", verdict: "Over-engineered", live: "https://course-ai.vercel.app", stars: 1, status: "kill" },
-      { name: "whop-app-ideas", desc: "Auto-generate certificates for Whop courses.", verdict: "Random free time idea", live: "https://whop-app-ideas.vercel.app", status: "kill" },
-      { name: "anti-slop-library", desc: "Detect AI 'slop' aesthetic in web projects.", verdict: "Novelty project", live: "https://anti-slop-library.vercel.app", status: "kill" },
-      { name: "ai-arbitrage", desc: "Turn AI model updates into business opportunities.", verdict: "Needs fresh data", live: "https://ai-arbitrage.vercel.app", status: "kill" },
-      { name: "why-pump", desc: "Real-time catalyst detection for Solana tokens.", verdict: "Archived", status: "kill" },
-      { name: "rohunvora", desc: "GitHub profile README.", verdict: "Not a project", status: "kill" }
-    ];
-
+    // Section toggle
     function toggleSection(id) {
       document.getElementById(id).classList.toggle('collapsed');
     }
 
-    function render() {
-      const ship = projects.filter(p => p.status === 'ship');
-      const cut = projects.filter(p => p.status === 'cut');
-      const kill = projects.filter(p => p.status === 'kill');
+    // Fill a table with projects
+    function fillTable(id, list) {
+      const tbody = document.querySelector(`#${id} tbody`);
+      tbody.innerHTML = '';
+      const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+      const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
 
-      document.getElementById('ship-count').textContent = ship.length;
-      document.getElementById('cut-count').textContent = cut.length;
-      document.getElementById('kill-count').textContent = kill.length;
-      document.getElementById('ship-badge').textContent = ship.length;
-      document.getElementById('cut-badge').textContent = cut.length;
-      document.getElementById('kill-badge').textContent = kill.length;
-      document.getElementById('kill-toggle-count').textContent = kill.length;
+      list.forEach(p => {
+        const tr = document.createElement('tr');
+        const starsHtml = p.stars ? `<span class="project-stars">★${p.stars}</span>` : '';
 
-      function fillTable(id, list) {
-        const tbody = document.querySelector(`#${id} tbody`);
-        tbody.innerHTML = ''; // Clear for re-render
-        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-        const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+        // Color code: green if <7d, muted if >30d
+        let commitClass = 'last-commit';
+        if (p.pushed_at && p.pushed_at > sevenDaysAgo) commitClass += ' recent';
+        else if (!p.pushed_at || p.pushed_at < thirtyDaysAgo) commitClass += ' stale';
 
-        list.forEach(p => {
-          const tr = document.createElement('tr');
-          const starsHtml = p.stars ? `<span class="project-stars">★${p.stars}</span>` : '';
-
-          // Color code: green if <7d, muted if >30d
-          let commitClass = 'last-commit';
-          if (p.pushed_at && p.pushed_at > sevenDaysAgo) commitClass += ' recent';
-          else if (!p.pushed_at || p.pushed_at < thirtyDaysAgo) commitClass += ' stale';
-
-          tr.innerHTML = `
-            <td>
-              <span class="project-name">${p.name}</span>${starsHtml}
-              <div class="verdict">${p.verdict}</div>
-            </td>
-            <td class="desc">${p.desc}</td>
-            <td class="${commitClass}">${timeAgo(p.pushed_at)}</td>
-            <td>${p.live ? `<a href="${p.live}" target="_blank" class="btn-live">Live →</a>` : '<span class="no-link">—</span>'}</td>
-          `;
-          tbody.appendChild(tr);
-        });
-      }
-
-      fillTable('table-ship', ship);
-      fillTable('table-cut', cut);
-      fillTable('table-kill', kill);
+        tr.innerHTML = `
+          <td>
+            <a href="${p.repoUrl}" target="_blank" class="project-name">${p.displayName}</a>${starsHtml}
+            <div class="verdict">${p.notes}</div>
+          </td>
+          <td class="desc">${p.description}</td>
+          <td class="${commitClass}">${timeAgo(p.pushed_at)}</td>
+          <td>${p.liveUrl ? `<a href="${p.liveUrl}" target="_blank" class="btn-live">Live →</a>` : '<span class="no-link">—</span>'}</td>
+        `;
+        tbody.appendChild(tr);
+      });
     }
 
-    render();
-    enrichWithGitHub(); // Fetch live GitHub data (stars, activity)
+    // Render projects from API data
+    function render(data) {
+      portfolioData = data; // Store for sorting
+      const active = data.projects.filter(p => p.category === 'active');
+      const done = data.projects.filter(p => p.category === 'done');
+      const paused = data.projects.filter(p => p.category === 'paused');
+
+      document.getElementById('ship-count').textContent = active.length;
+      document.getElementById('cut-count').textContent = done.length;
+      document.getElementById('kill-count').textContent = paused.length;
+      document.getElementById('ship-badge').textContent = active.length;
+      document.getElementById('cut-badge').textContent = done.length;
+      document.getElementById('kill-badge').textContent = paused.length;
+      document.getElementById('kill-toggle-count').textContent = paused.length;
+
+      fillTable('table-ship', active);
+      fillTable('table-cut', done);
+      fillTable('table-kill', paused);
+
+      // Show last updated time
+      const updatedAt = new Date(data.generatedAt);
+      document.querySelector('.stats').innerHTML = `
+        <strong>Summary:</strong>
+        <span id="ship-count">${active.length}</span> active,
+        <span id="cut-count">${done.length}</span> done,
+        <span id="kill-count">${paused.length}</span> paused
+        <span style="color: var(--text-faint); margin-left: var(--space-2);">· Updated ${updatedAt.toLocaleDateString()}</span>
+      `;
+    }
+
+    // Show loading state
+    function showLoading() {
+      ['table-ship', 'table-cut', 'table-kill'].forEach(id => {
+        const tbody = document.querySelector(`#${id} tbody`);
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Loading...</td></tr>';
+      });
+    }
+
+    // Show error state
+    function showError(message) {
+      ['table-ship', 'table-cut', 'table-kill'].forEach(id => {
+        const tbody = document.querySelector(`#${id} tbody`);
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--red-text);">${message}</td></tr>`;
+      });
+    }
+
+    // Fetch and render
+    async function init() {
+      showLoading();
+      try {
+        const response = await fetch('/api/portfolio');
+        if (!response.ok) throw new Error('Failed to load');
+        const data = await response.json();
+        if (data.error) throw new Error(data.error);
+        render(data);
+      } catch (err) {
+        showError('Failed to load projects');
+        console.error(err);
+      }
+    }
+
+    init();
   </script>
 </body>
 </html>

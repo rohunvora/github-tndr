@@ -5,6 +5,7 @@
   "description": "Telegram bot framework with pluggable tools, multi-provider AI, and testable skills layer",
   "scripts": {
     "dev": "vercel dev",
+    "generate-portfolio": "npx tsx scripts/generate-portfolio.ts",
     "optimize-readmes": "npx tsx scripts/optimize-readmes.ts",
     "regenerate-images": "npx tsx scripts/regenerate-images.ts",
     "regenerate-screenshots": "npx tsx scripts/regenerate-with-screenshots.ts",
