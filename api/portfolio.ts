@@ -12,34 +12,40 @@ const USER_PRIORITIES: Record<string, {
   notes: string;
   displayName: string;
 }> = {
+  // CORE - main project
   'github-tndr': { tier: 'CORE', notes: 'Hub for all my life automations & personal OS', displayName: 'Ship or Kill Bot' },
-  'prmpt-hstry': { tier: 'INTEGRATED', notes: 'Cursor optimizations', displayName: 'Cursor Maxxing' },
-  'bel-rtr': { tier: 'INTEGRATED', notes: 'Migrated as tool for github-bot', displayName: 'Chart AI' },
-  'arena-lib': { tier: 'INTEGRATED', notes: 'My taste is edge', displayName: 'Taste Library' },
-  'rev-agg': { tier: 'STANDALONE', notes: 'Frank DeGods shared it', displayName: 'Buyback Tracker' },
-  'tweet-price': { tier: 'STANDALONE', notes: 'Need story to tweet', displayName: 'Tweet Price Charts' },
-  'kab-query': { tier: 'STANDALONE', notes: 'Already shipped, one time query', displayName: 'Kabuto Cards' },
-  'unfllw': { tier: 'INCUBATING', notes: 'Could get very popular, needs resurrection', displayName: 'Unfollow Bot' },
+
+  // INTEGRATED - tools that feed into core
+  'cursor-maxxing': { tier: 'INTEGRATED', notes: 'Cursor optimizations', displayName: 'Cursor Maxxing' },
+  'chart-ai': { tier: 'INTEGRATED', notes: 'Migrated as tool for github-bot', displayName: 'Chart AI' },
+  'taste-library': { tier: 'INTEGRATED', notes: 'My taste is edge', displayName: 'Taste Library' },
+
+  // STANDALONE - shipped and complete
+  'my-cmc': { tier: 'STANDALONE', notes: 'Frank DeGods shared it', displayName: 'Buyback Tracker' },
+  'tweet-price-charts': { tier: 'STANDALONE', notes: 'Need story to tweet', displayName: 'Tweet Price Charts' },
+  'kabuto-cards-dashboard': { tier: 'STANDALONE', notes: 'Already shipped, one time query', displayName: 'Kabuto Cards' },
+
+  // INCUBATING - high potential, needs work
+  'unfollow-bot': { tier: 'INCUBATING', notes: 'Could get very popular, needs resurrection', displayName: 'Unfollow Bot' },
+
+  // ARCHIVED - on hold
   'habit-snapper': { tier: 'ARCHIVED', notes: 'Concepts could apply to hub', displayName: 'Habit Snapper' },
-  'whp-app': { tier: 'ARCHIVED', notes: 'Random free time idea', displayName: 'Whop Certificates' },
+  'whop-app-ideas': { tier: 'ARCHIVED', notes: 'Random free time idea', displayName: 'Whop Certificates' },
   'spaces-chat': { tier: 'ARCHIVED', notes: 'Niche but useful', displayName: 'Spaces Chat' },
   'cursortimer': { tier: 'ARCHIVED', notes: 'Needs polish', displayName: 'Cursor Timer' },
-  'coursebuilder': { tier: 'ARCHIVED', notes: 'Over-engineered', displayName: 'Course AI' },
+  'course-ai': { tier: 'ARCHIVED', notes: 'Over-engineered', displayName: 'Course AI' },
   'chart-predictoor': { tier: 'ARCHIVED', notes: 'Fun, could go viral', displayName: 'Chart Predictoor' },
-  'catalysts': { tier: 'ARCHIVED', notes: 'Archived', displayName: 'Why Pump' },
-  'anti-slop-lib': { tier: 'ARCHIVED', notes: 'Novelty project', displayName: 'Anti-Slop' },
-  'ai-changelog': { tier: 'ARCHIVED', notes: 'Needs fresh data', displayName: 'AI Arbitrage' },
-  'ai-assistant-grows': { tier: 'ARCHIVED', notes: 'Finish lessons someday', displayName: 'Agent Course' },
+  'why-pump': { tier: 'ARCHIVED', notes: 'Archived', displayName: 'Why Pump' },
+  'anti-slop-library': { tier: 'ARCHIVED', notes: 'Novelty project', displayName: 'Anti-Slop' },
+  'ai-arbitrage': { tier: 'ARCHIVED', notes: 'Needs fresh data', displayName: 'AI Arbitrage' },
+  'agent-course': { tier: 'ARCHIVED', notes: 'Finish lessons someday', displayName: 'Agent Course' },
+
   // KILLED tier - hidden from portfolio
   'cursor-habits': { tier: 'KILLED', notes: 'merge', displayName: '' },
   'physics-vid': { tier: 'KILLED', notes: 'stub', displayName: '' },
   'rohunvora': { tier: 'KILLED', notes: 'profile', displayName: '' },
-  'llm-arb': { tier: 'KILLED', notes: 'empty', displayName: '' },
-  'gt-test': { tier: 'KILLED', notes: 'test', displayName: '' },
-  'hl-analyzer': { tier: 'KILLED', notes: 'empty', displayName: '' },
   'rohun': { tier: 'KILLED', notes: 'boilerplate', displayName: '' },
   'rrcalc': { tier: 'KILLED', notes: 'old', displayName: '' },
-  'srs-test': { tier: 'KILLED', notes: 'test', displayName: '' },
   'iqmode': { tier: 'KILLED', notes: 'empty', displayName: '' },
 };
 
